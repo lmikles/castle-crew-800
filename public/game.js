@@ -1,0 +1,626 @@
+(() => {
+  "use strict";
+
+  const canvas = document.querySelector("#game");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.imageSmoothingEnabled = false;
+
+  const ui = {
+    signal: document.querySelector("#signal"),
+    create: document.querySelector("#create-button"),
+    join: document.querySelector("#join-button"),
+    dialog: document.querySelector("#mission-dialog"),
+    form: document.querySelector("#mission-form"),
+    dialogEyebrow: document.querySelector("#dialog-eyebrow"),
+    dialogTitle: document.querySelector("#dialog-title"),
+    dialogCopy: document.querySelector("#dialog-copy"),
+    dialogSubmit: document.querySelector("#dialog-submit"),
+    dialogError: document.querySelector("#dialog-error"),
+    roomField: document.querySelector("#room-field"),
+    roomInput: document.querySelector("#room-code-input"),
+    mission: document.querySelector("#mission-panel"),
+    missionStatus: document.querySelector("#mission-status"),
+    copyCode: document.querySelector("#copy-code"),
+    leave: document.querySelector("#leave-button"),
+    movementCard: document.querySelector("#movement-card"),
+    weaponsCard: document.querySelector("#weapons-card"),
+    score: document.querySelector("#score"),
+    floor: document.querySelector("#floor"),
+    timer: document.querySelector("#timer"),
+    gameMessage: document.querySelector("#game-message"),
+    toast: document.querySelector("#toast")
+  };
+
+  const PALETTE = {
+    dark: "#08090d",
+    deepest: "#020309",
+    floor: "#090a10",
+    floorDark: "#11131c",
+    wall: "#d9d6d0",
+    mortar: "#7e7d86",
+    red: "#b56d6d",
+    rust: "#7b5961",
+    glow: "#e1dda9",
+    paper: "#d9d6d0",
+    blue: "#7683b5",
+    white: "#f6f2e9"
+  };
+
+  let socket;
+  let pendingAction = null;
+  let roomCode = "";
+  let myRole = "";
+  let gameState = null;
+  let lobbyState = null;
+  let dialogMode = "create";
+  let lastFrame = performance.now();
+  let attractTime = 0;
+  let lastBulletCount = 0;
+  let lastExplosionCount = 0;
+  let lastFlash = "";
+  let lastRoomNumber = 0;
+  let roomChangeAt = 0;
+  let audioContext = null;
+  let toastTimer;
+
+  const held = new Set();
+  const impulses = { fire: 0, grenade: 0 };
+  const gamepadHeld = { fire: false, grenade: false };
+
+  function toast(message) {
+    ui.toast.textContent = message;
+    ui.toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => ui.toast.classList.remove("show"), 1600);
+  }
+
+  function initAudio() {
+    if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === "suspended") audioContext.resume();
+  }
+
+  function tone(frequency, length, type = "square", volume = 0.035, slide = 0) {
+    if (!audioContext) return;
+    const now = audioContext.currentTime;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, now);
+    if (slide) oscillator.frequency.exponentialRampToValueAtTime(Math.max(30, frequency + slide), now + length);
+    gain.gain.setValueAtTime(volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + length);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + length);
+  }
+
+  function noiseBurst(length = 0.18, volume = 0.05) {
+    if (!audioContext) return;
+    const frames = Math.ceil(audioContext.sampleRate * length);
+    const buffer = audioContext.createBuffer(1, frames, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / frames);
+    const source = audioContext.createBufferSource();
+    const gain = audioContext.createGain();
+    source.buffer = buffer;
+    gain.gain.value = volume;
+    source.connect(gain).connect(audioContext.destination);
+    source.start();
+  }
+
+  function voiceCue(text) {
+    if (!audioContext || !window.speechSynthesis) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.72;
+    utterance.pitch = 0.45;
+    utterance.volume = 0.42;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function connect() {
+    if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    socket = new WebSocket(`${protocol}//${location.host}`);
+    ui.signal.querySelector("span").textContent = "CONNECTING";
+    socket.addEventListener("open", () => {
+      ui.signal.classList.add("online");
+      ui.signal.querySelector("span").textContent = "LINK READY";
+      if (pendingAction) {
+        socket.send(JSON.stringify(pendingAction));
+        pendingAction = null;
+      }
+    });
+    socket.addEventListener("close", () => {
+      ui.signal.classList.remove("online");
+      ui.signal.querySelector("span").textContent = "LINK LOST";
+      if (roomCode) {
+        ui.gameMessage.hidden = false;
+        ui.gameMessage.textContent = "RADIO LINK LOST — RELOADING…";
+        setTimeout(() => location.reload(), 1800);
+      } else {
+        setTimeout(connect, 1400);
+      }
+    });
+    socket.addEventListener("message", ({ data }) => handleMessage(JSON.parse(data)));
+  }
+
+  function send(message) {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    else {
+      pendingAction = message;
+      connect();
+    }
+  }
+
+  function handleMessage(message) {
+    if (message.type === "error") {
+      ui.dialogError.textContent = message.message;
+      if (!ui.dialog.open) ui.dialog.showModal();
+      tone(90, .2, "square", .04, -25);
+      return;
+    }
+    if (message.type === "joined") {
+      roomCode = message.code;
+      myRole = message.role;
+      ui.dialog.close();
+      ui.copyCode.textContent = roomCode;
+      ui.mission.hidden = false;
+      document.body.classList.add("in-mission");
+      updateRoleCards();
+      ui.mission.scrollIntoView({ behavior: "smooth", block: "end" });
+      history.replaceState(null, "", `?room=${roomCode}`);
+      tone(220, .09, "square", .03, 110);
+      setTimeout(() => tone(440, .12, "square", .025), 100);
+      return;
+    }
+    if (message.type === "lobby") {
+      lobbyState = message;
+      updateRoleCards();
+      return;
+    }
+    if (message.type === "start") {
+      ui.missionStatus.textContent = "Both operators online. The castle is live.";
+      tone(180, .1, "square", .035, 170);
+      setTimeout(() => tone(360, .18, "square", .035, 180), 120);
+      return;
+    }
+    if (message.type === "state") {
+      if (message.bullets.length > lastBulletCount) tone(130, .075, "square", .035, -75);
+      if (message.explosions.length > lastExplosionCount) noiseBurst(.25, .075);
+      if (message.flash && message.flash !== lastFlash) {
+        if (message.flash.includes("ACHTUNG")) voiceCue("Achtung!");
+        if (message.flash.includes("KAMERAD")) voiceCue("Kamerad!");
+        if (message.flash.includes("WAR PLANS")) {
+          tone(240, .1, "square", .03, 220);
+          setTimeout(() => tone(480, .16, "square", .03, 180), 120);
+        }
+      }
+      if (message.room?.number && message.room.number !== lastRoomNumber) {
+        roomChangeAt = performance.now();
+        tone(72, .08, "square", .025, 30);
+      }
+      lastBulletCount = message.bullets.length;
+      lastExplosionCount = message.explosions.length;
+      lastFlash = message.flash;
+      lastRoomNumber = message.room?.number || lastRoomNumber;
+      gameState = message;
+      updateHud();
+    }
+  }
+
+  function updateRoleCards() {
+    const players = lobbyState?.players || lobbyState?.connected || { movement: myRole === "movement", weapons: myRole === "weapons" };
+    for (const role of ["movement", "weapons"]) {
+      const card = role === "movement" ? ui.movementCard : ui.weaponsCard;
+      const online = Boolean(players[role]);
+      card.classList.toggle("online", online);
+      card.classList.toggle("you", myRole === role);
+      card.querySelector(".operator-status").textContent = online ? "ONLINE" : "WAITING";
+    }
+    if (players.movement && players.weapons) ui.missionStatus.textContent = "Both operators online. The castle is live.";
+    else if (myRole) ui.missionStatus.textContent = `You are ${myRole === "movement" ? "the Legs" : "the Arms"}. Share ${roomCode} with your partner.`;
+  }
+
+  function updateHud() {
+    if (!gameState) return;
+    ui.score.textContent = String(gameState.score).padStart(6, "0");
+    ui.floor.textContent = `${String(gameState.level).padStart(2, "0")} / 05`;
+    const seconds = Math.max(0, Math.ceil(gameState.time));
+    ui.timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    const both = gameState.connected.movement && gameState.connected.weapons;
+    updateRoleCardsFromConnected(gameState.connected);
+    if (!both && roomCode) {
+      ui.gameMessage.hidden = false;
+      ui.gameMessage.textContent = "AWAITING SECOND OPERATOR…";
+    } else if (gameState.flash) {
+      ui.gameMessage.hidden = false;
+      ui.gameMessage.textContent = gameState.flash;
+    } else if (["won", "lost"].includes(gameState.status)) {
+      ui.gameMessage.hidden = false;
+      ui.gameMessage.textContent = gameState.status === "won" ? "CASTLE CLEARED — PRESS R TO PLAY AGAIN" : "MISSION FAILED — PRESS R TO REGROUP";
+    } else {
+      ui.gameMessage.hidden = true;
+    }
+  }
+
+  function updateRoleCardsFromConnected(connected) {
+    if (!connected) return;
+    for (const role of ["movement", "weapons"]) {
+      const card = role === "movement" ? ui.movementCard : ui.weaponsCard;
+      card.classList.toggle("online", connected[role]);
+      card.classList.toggle("you", myRole === role);
+      card.querySelector(".operator-status").textContent = connected[role] ? "ONLINE" : "WAITING";
+    }
+  }
+
+  function openDialog(mode) {
+    dialogMode = mode;
+    ui.dialogError.textContent = "";
+    ui.roomField.hidden = mode !== "join";
+    ui.dialogEyebrow.textContent = mode === "join" ? "JOIN MISSION" : "NEW MISSION";
+    ui.dialogTitle.textContent = mode === "join" ? "Tune to their room." : "Choose your controller.";
+    ui.dialogCopy.textContent = mode === "join" ? "Enter the four-character code from your partner." : "Your partner will take the other half of the agent.";
+    ui.dialogSubmit.firstChild.textContent = mode === "join" ? "JOIN ROOM " : "CREATE ROOM ";
+    const queryCode = new URLSearchParams(location.search).get("room");
+    if (queryCode && mode === "join") ui.roomInput.value = queryCode.slice(0, 4).toUpperCase();
+    ui.dialog.showModal();
+    if (mode === "join") setTimeout(() => ui.roomInput.focus(), 50);
+  }
+
+  ui.create.addEventListener("click", () => { initAudio(); openDialog("create"); });
+  ui.join.addEventListener("click", () => { initAudio(); openDialog("join"); });
+  ui.roomInput.addEventListener("input", () => {
+    ui.roomInput.value = ui.roomInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  });
+  ui.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    initAudio();
+    const role = new FormData(ui.form).get("role");
+    if (dialogMode === "join") {
+      const code = ui.roomInput.value.trim().toUpperCase();
+      if (code.length !== 4) {
+        ui.dialogError.textContent = "A room code has four characters.";
+        return;
+      }
+      send({ type: "join", code, role });
+    } else send({ type: "create", role });
+  });
+  ui.copyCode.addEventListener("click", async () => {
+    const shareUrl = `${location.origin}${location.pathname}?room=${roomCode}`;
+    try { await navigator.clipboard.writeText(`Join my Castle Crew mission: ${roomCode}\n${shareUrl}`); toast("INVITE COPIED"); }
+    catch { await navigator.clipboard.writeText(roomCode); toast("CODE COPIED"); }
+    tone(520, .08, "square", .025, 160);
+  });
+  ui.leave.addEventListener("click", () => { history.replaceState(null, "", location.pathname); location.reload(); });
+
+  const keyMap = {
+    KeyW: "up", KeyS: "down", KeyA: "left", KeyD: "right",
+    ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right"
+  };
+
+  addEventListener("keydown", (event) => {
+    if (!roomCode) return;
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
+    held.add(event.code);
+    if (!event.repeat && myRole === "weapons" && event.code === "Space") {
+      impulses.fire = 1;
+      sendControls();
+    }
+    if (!event.repeat && myRole === "weapons" && (event.code === "KeyG" || event.code === "Enter")) {
+      impulses.grenade = 1;
+      sendControls();
+    }
+    if (!event.repeat && event.code === "KeyR" && ["won", "lost"].includes(gameState?.status)) send({ type: "restart" });
+  });
+  addEventListener("keyup", (event) => held.delete(event.code));
+  addEventListener("blur", () => held.clear());
+
+  function gamepadInput() {
+    const pad = navigator.getGamepads?.()[0];
+    if (!pad) return null;
+    const threshold = 0.35;
+    const input = {
+      left: (pad.axes[0] || 0) < -threshold || pad.buttons[14]?.pressed,
+      right: (pad.axes[0] || 0) > threshold || pad.buttons[15]?.pressed,
+      up: (pad.axes[1] || 0) < -threshold || pad.buttons[12]?.pressed,
+      down: (pad.axes[1] || 0) > threshold || pad.buttons[13]?.pressed,
+      sneak: Boolean(pad.buttons[4]?.pressed || pad.buttons[5]?.pressed),
+      search: Boolean(pad.buttons[2]?.pressed)
+    };
+    const fireNow = Boolean(pad.buttons[0]?.pressed || pad.buttons[7]?.pressed);
+    const grenadeNow = Boolean(pad.buttons[1]?.pressed || pad.buttons[6]?.pressed);
+    if (fireNow && !gamepadHeld.fire) impulses.fire = 1;
+    if (grenadeNow && !gamepadHeld.grenade) impulses.grenade = 1;
+    gamepadHeld.fire = fireNow;
+    gamepadHeld.grenade = grenadeNow;
+    return input;
+  }
+
+  function collectInput() {
+    const pad = gamepadInput();
+    if (myRole === "movement") {
+      return {
+        up: held.has("KeyW") || pad?.up,
+        down: held.has("KeyS") || pad?.down,
+        left: held.has("KeyA") || pad?.left,
+        right: held.has("KeyD") || pad?.right,
+        sneak: held.has("ShiftLeft") || held.has("ShiftRight") || pad?.sneak,
+        search: held.has("KeyE") || pad?.search,
+        fire: 0, grenade: 0
+      };
+    }
+    return {
+      up: held.has("ArrowUp") || pad?.up,
+      down: held.has("ArrowDown") || pad?.down,
+      left: held.has("ArrowLeft") || pad?.left,
+      right: held.has("ArrowRight") || pad?.right,
+      sneak: false, search: false,
+      fire: impulses.fire,
+      grenade: impulses.grenade
+    };
+  }
+
+  function sendControls() {
+    if (!roomCode || !myRole) return;
+    const input = collectInput();
+    send({ type: "input", input });
+    impulses.fire = 0;
+    impulses.grenade = 0;
+  }
+  setInterval(sendControls, 1000 / 20);
+
+  function rect(x, y, width, height, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+  }
+
+  const ROOM_WIDTH = 10;
+  const ROOM_HEIGHT = 8;
+  const CELL_W = 58;
+  const CELL_H = 40;
+  const ROOM_LEFT = 30;
+  const ROOM_TOP = 30;
+  const ROOM_RIGHT = 610;
+  const ROOM_BOTTOM = 350;
+
+  function roomOf(entity) {
+    return {
+      x: Math.max(0, Math.min(3, Math.floor(entity.x / ROOM_WIDTH))),
+      y: Math.max(0, Math.min(2, Math.floor(entity.y / ROOM_HEIGHT)))
+    };
+  }
+
+  function visibleInRoom(entity, room) {
+    const entityRoom = roomOf(entity);
+    return entityRoom.x === room.x && entityRoom.y === room.y;
+  }
+
+  function screenPoint(entity, room) {
+    return {
+      x: ROOM_LEFT + (entity.x - room.x * ROOM_WIDTH) * CELL_W,
+      y: ROOM_TOP + (entity.y - room.y * ROOM_HEIGHT) * CELL_H
+    };
+  }
+
+  function tinyText(text, x, y, color = PALETTE.paper, align = "left", size = 10) {
+    ctx.fillStyle = color;
+    ctx.font = `bold ${size}px "Lucida Console", monospace`;
+    ctx.textAlign = align;
+    ctx.fillText(text, x, y);
+  }
+
+  function patternedHorizontal(x1, x2, y, color = PALETTE.paper) {
+    rect(x1, y - 5, x2 - x1, 10, color);
+    for (let x = x1 + 5; x < x2 - 3; x += 12) rect(x, y - 2, 5, 4, PALETTE.deepest);
+  }
+
+  function patternedVertical(x, y1, y2, color = PALETTE.paper) {
+    rect(x - 5, y1, 10, y2 - y1, color);
+    for (let y = y1 + 5; y < y2 - 3; y += 12) rect(x - 2, y, 4, 5, PALETTE.deepest);
+  }
+
+  function eraseDoor(x, y, horizontal) {
+    if (horizontal) rect(x - 28, y - 8, 56, 16, PALETTE.deepest);
+    else rect(x - 8, y - 28, 16, 56, PALETTE.deepest);
+    rect(x - 5, y - 5, 10, 10, PALETTE.blue);
+  }
+
+  function drawStairs(x, y, active) {
+    const ink = active ? PALETTE.white : PALETTE.mortar;
+    rect(x - 25, y - 19, 50, 38, PALETTE.deepest);
+    for (let step = 0; step < 5; step += 1) {
+      rect(x - 23 + step * 4, y + 13 - step * 7, 44 - step * 8, 4, ink);
+    }
+  }
+
+  function drawRoom(map, room, plansFound) {
+    rect(0, 0, canvas.width, canvas.height, PALETTE.deepest);
+    tinyText(`FLOOR ${room.floor || 1}   ROOM ${String(room.number || 1).padStart(2, "0")} / 60`, 30, 18, PALETTE.blue, "left", 10);
+    patternedHorizontal(ROOM_LEFT, ROOM_RIGHT, ROOM_TOP);
+    patternedHorizontal(ROOM_LEFT, ROOM_RIGHT, ROOM_BOTTOM);
+    patternedVertical(ROOM_LEFT, ROOM_TOP, ROOM_BOTTOM);
+    patternedVertical(ROOM_RIGHT, ROOM_TOP, ROOM_BOTTOM);
+
+    const startX = room.x * ROOM_WIDTH;
+    const startY = room.y * ROOM_HEIGHT;
+    if (room.x > 0) {
+      for (let y = startY; y <= Math.min(startY + ROOM_HEIGHT, CastleShared.MAP_HEIGHT - 1); y += 1) {
+        if (map[y]?.[startX] === "+") eraseDoor(ROOM_LEFT, ROOM_TOP + (y - startY + .5) * CELL_H, false);
+      }
+    }
+    if (room.x < 3) {
+      const boundaryX = startX + ROOM_WIDTH;
+      for (let y = startY; y <= Math.min(startY + ROOM_HEIGHT, CastleShared.MAP_HEIGHT - 1); y += 1) {
+        if (map[y]?.[boundaryX] === "+") eraseDoor(ROOM_RIGHT, ROOM_TOP + (y - startY + .5) * CELL_H, false);
+      }
+    }
+    if (room.y > 0) {
+      for (let x = startX; x <= Math.min(startX + ROOM_WIDTH, CastleShared.MAP_WIDTH - 1); x += 1) {
+        if (map[startY]?.[x] === "+") eraseDoor(ROOM_LEFT + (x - startX + .5) * CELL_W, ROOM_TOP, true);
+      }
+    }
+    if (room.y < 2) {
+      const boundaryY = startY + ROOM_HEIGHT;
+      for (let x = startX; x <= Math.min(startX + ROOM_WIDTH, CastleShared.MAP_WIDTH - 1); x += 1) {
+        if (map[boundaryY]?.[x] === "+") eraseDoor(ROOM_LEFT + (x - startX + .5) * CELL_W, ROOM_BOTTOM, true);
+      }
+    }
+
+    for (let y = startY + 1; y < Math.min(startY + ROOM_HEIGHT, CastleShared.MAP_HEIGHT - 1); y += 1) {
+      for (let x = startX + 1; x < Math.min(startX + ROOM_WIDTH, CastleShared.MAP_WIDTH - 1); x += 1) {
+        const tile = map[y]?.[x];
+        const sx = ROOM_LEFT + (x - startX + .5) * CELL_W;
+        const sy = ROOM_TOP + (y - startY + .5) * CELL_H;
+        if (tile === "#") {
+          patternedHorizontal(sx - CELL_W / 2, sx + CELL_W / 2, sy, PALETTE.mortar);
+          patternedVertical(sx, sy - CELL_H / 2, sy + CELL_H / 2, PALETTE.mortar);
+        } else if (tile === "S") drawStairs(sx, sy, false);
+        else if (tile === "E") drawStairs(sx, sy, plansFound > 0);
+      }
+    }
+  }
+
+  function drawPlayer(player, room) {
+    const { x, y } = screenPoint(player, room);
+    if (player.invulnerable > 0 && Math.floor(performance.now() / 80) % 2) return;
+    const facing = player.aimX < 0 ? -1 : 1;
+    const coat = player.disguise ? PALETTE.mortar : PALETTE.paper;
+    rect(x - 10, y - 15, 20, 25, coat);
+    rect(x - 7, y - 29, 14, 13, PALETTE.paper);
+    rect(x - 10, y - 31, 20, 5, player.disguise ? PALETTE.mortar : PALETTE.blue);
+    rect(x - 9, y + 9, 7, 14, coat);
+    rect(x + 2, y + 9, 7, 14, coat);
+    rect(x - 12, y + 21, 10, 4, PALETTE.paper);
+    rect(x + 2, y + 21, 10, 4, PALETTE.paper);
+    const handX = x + player.aimX * 18;
+    const handY = y - 6 + player.aimY * 18;
+    rect(handX - 4, handY - 4, 8, 8, PALETTE.paper);
+    rect(handX, handY - 2, facing * 17, 4, PALETTE.paper);
+    rect(handX + facing * 14, handY - 1, facing * 7, 3, PALETTE.blue);
+    if (player.searching) tinyText("SEARCH", x, y - 39, PALETTE.glow, "center", 8);
+  }
+
+  function drawGuard(enemy, room) {
+    const { x, y } = screenPoint(enemy, room);
+    if (enemy.health <= 0) {
+      rect(x - 22, y + 7, 44, 7, PALETTE.mortar);
+      rect(x + 8, y, 12, 10, PALETTE.paper);
+      return;
+    }
+    const ink = enemy.elite ? PALETTE.white : PALETTE.mortar;
+    rect(x - 10, y - 15, 20, 25, ink);
+    rect(x - 7, y - 29, 14, 13, PALETTE.paper);
+    rect(x - 11, y - 31, 22, 5, enemy.elite ? PALETTE.white : PALETTE.mortar);
+    rect(x - 9, y + 9, 7, 14, ink);
+    rect(x + 2, y + 9, 7, 14, ink);
+    if (enemy.state === "surrendered") {
+      rect(x - 20, y - 27, 7, 22, PALETTE.paper);
+      rect(x + 13, y - 27, 7, 22, PALETTE.paper);
+      tinyText("KAMERAD", x, y - 38, PALETTE.white, "center", 8);
+    } else {
+      const facing = Math.cos(enemy.facing) < 0 ? -1 : 1;
+      rect(x + facing * 9, y - 8, facing * 18, 5, PALETTE.paper);
+      if (enemy.state === "alert") tinyText("!", x, y - 37, PALETTE.white, "center", 14);
+      if (enemy.state === "threatened") tinyText("?", x, y - 37, PALETTE.glow, "center", 12);
+    }
+    if ((enemy.searchProgress || 0) > 0 && !enemy.searched) {
+      rect(x - 17, y + 29, 34, 3, PALETTE.mortar);
+      rect(x - 17, y + 29, 34 * Math.min(1, enemy.searchProgress / .9), 3, PALETTE.white);
+    }
+  }
+
+  function drawChest(chest, room) {
+    const { x, y } = screenPoint(chest, room);
+    const ink = chest.locked ? PALETTE.blue : PALETTE.paper;
+    if (chest.opened) {
+      rect(x - 21, y + 5, 42, 17, PALETTE.mortar);
+      rect(x - 20, y - 12, 40, 6, ink);
+      rect(x - 23, y - 10, 6, 17, ink);
+    } else {
+      rect(x - 22, y - 10, 44, 29, ink);
+      rect(x - 18, y - 6, 36, 21, PALETTE.deepest);
+      patternedHorizontal(x - 22, x + 22, y - 10, ink);
+      rect(x - 3, y - 2, 6, 11, ink);
+    }
+    if ((chest.searchProgress || 0) > 0 && !chest.searched) {
+      rect(x - 20, y + 26, 40, 4, PALETTE.mortar);
+      rect(x - 20, y + 26, 40 * Math.min(1, chest.searchProgress / .9), 4, PALETTE.white);
+    }
+  }
+
+  function drawProjectile(item, room, color, size = 4) {
+    const { x, y } = screenPoint(item, room);
+    rect(x - size / 2, y - size / 2, size, size, color);
+  }
+
+  function drawExplosion(item, room) {
+    const { x, y } = screenPoint(item, room);
+    const pulse = Math.max(8, Math.round((.55 - item.life) * 90));
+    rect(x - pulse, y - 4, pulse * 2, 8, PALETTE.white);
+    rect(x - 4, y - pulse, 8, pulse * 2, PALETTE.white);
+    rect(x - pulse * .55, y - pulse * .55, pulse * 1.1, pulse * 1.1, PALETTE.mortar);
+  }
+
+  function drawGameHud(state) {
+    rect(0, 365, 640, 35, PALETTE.deepest);
+    tinyText(`LIFE ${"■".repeat(state.player.health)}${"□".repeat(Math.max(0, 4 - state.player.health))}`, 24, 386, PALETTE.paper, "left", 10);
+    tinyText(`AMMO ${String(state.player.ammo).padStart(2, "0")}`, 155, 386, PALETTE.paper, "left", 10);
+    tinyText(`GREN ${String(state.player.grenades).padStart(2, "0")}`, 260, 386, PALETTE.paper, "left", 10);
+    tinyText(`KEY ${state.player.keys || 0}`, 365, 386, PALETTE.paper, "left", 10);
+    tinyText(state.player.disguise ? "UNIFORM" : "PRISONER", 445, 386, state.player.disguise ? PALETTE.glow : PALETTE.mortar, "left", 9);
+    tinyText(state.player.intel ? "PLANS!" : "NO PLANS", 615, 386, state.player.intel ? PALETTE.white : PALETTE.mortar, "right", 9);
+  }
+
+  function drawGame(state) {
+    const map = CastleShared.generateMap(state.level);
+    const room = { ...(state.room || roomOf(state.player)), floor: state.level };
+    if (!room.number) room.number = (state.level - 1) * 12 + room.y * 4 + room.x + 1;
+    drawRoom(map, room, state.player.intel);
+    for (const chest of state.chests || []) if (visibleInRoom(chest, room)) drawChest(chest, room);
+    for (const enemy of state.enemies || []) if (visibleInRoom(enemy, room)) drawGuard(enemy, room);
+    for (const bullet of state.bullets || []) if (visibleInRoom(bullet, room)) drawProjectile(bullet, room, PALETTE.white, 5);
+    for (const bullet of state.enemyBullets || []) if (visibleInRoom(bullet, room)) drawProjectile(bullet, room, PALETTE.red, 5);
+    for (const grenade of state.thrown || []) if (visibleInRoom(grenade, room)) drawProjectile(grenade, room, Math.floor(grenade.fuse * 8) % 2 ? PALETTE.white : PALETTE.blue, 8);
+    for (const explosion of state.explosions || []) if (visibleInRoom(explosion, room)) drawExplosion(explosion, room);
+    drawPlayer(state.player, room);
+    drawGameHud(state);
+
+    const transitionAge = performance.now() - roomChangeAt;
+    if (transitionAge < 420 && lastRoomNumber) {
+      const opacity = Math.max(0, 1 - transitionAge / 420);
+      rect(0, 0, 640, 365, `rgba(2,4,10,${opacity})`);
+      tinyText(`ROOM ${String(room.number).padStart(2, "0")}`, 320, 205, PALETTE.white, "center", 16);
+    }
+  }
+
+  function makeAttractState(time) {
+    const safeTime = Number.isFinite(time) && time >= 0 ? time : 0;
+    const x = 3.4 + Math.sin(safeTime * .55) * .65;
+    const y = 21.1 + Math.cos(safeTime * .4) * .35;
+    return {
+      level: 1, alert: .1, room: { x: 0, y: 2, number: 9 },
+      player: { x, y, aimX: 1, aimY: Math.sin(safeTime * .7) * .25, health: 4, ammo: 10, grenades: 3, intel: 0, keys: 0, disguise: false, invulnerable: 0, searching: false },
+      enemies: [{ x: 6.2, y: 20.4, facing: Math.PI, state: Math.sin(safeTime) > .8 ? "threatened" : "patrol", health: 1, elite: false, searched: false }],
+      chests: [{ x: 7.5, y: 21.5, opened: false, searched: false, locked: false, searchProgress: 0 }],
+      bullets: [], enemyBullets: [], thrown: [], explosions: [], intel: [], ammo: []
+    };
+  }
+
+  function frame(now) {
+    const elapsed = (now - lastFrame) / 1000;
+    const dt = Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(.05, elapsed) : 0;
+    lastFrame = now;
+    if (gameState && roomCode) drawGame(gameState);
+    else {
+      attractTime += dt;
+      drawGame(makeAttractState(attractTime));
+    }
+    requestAnimationFrame(frame);
+  }
+
+  const invitedCode = new URLSearchParams(location.search).get("room");
+  if (invitedCode) setTimeout(() => openDialog("join"), 250);
+  connect();
+  requestAnimationFrame(frame);
+})();

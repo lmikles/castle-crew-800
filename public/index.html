@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111c1a">
+  <meta name="description" content="One body. Two operators. A two-player online Atari-style castle infiltration game.">
+  <title>Castle Crew // 800</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="Castle Crew 800 home">
+        <span class="castle-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>CASTLE CREW <b>// 800</b></span>
+      </a>
+      <div class="signal" id="signal"><i></i><span>OFFLINE</span></div>
+    </header>
+
+    <section class="hero" id="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">TWO-OPERATOR INFILTRATION</p>
+        <h1>One body.<br><em>Two minds.</em></h1>
+        <p class="lede">Break into the castle together. One operator runs the legs. The other aims the pistol and throws the grenades. Coordination is your only superpower.</p>
+        <div class="hero-actions">
+          <button class="btn primary" id="create-button">CREATE MISSION <span>↗</span></button>
+          <button class="btn ghost" id="join-button">ENTER ROOM CODE</button>
+        </div>
+        <p class="fine-print">2 players · browser-to-browser · keyboard or gamepad</p>
+      </div>
+
+      <div class="cabinet" aria-label="Attract mode game preview">
+        <div class="cabinet-top">
+          <span>ATARI 800 COMPATIBLE</span><span>CARTRIDGE No. 026</span>
+        </div>
+        <div class="screen-wrap">
+          <canvas id="game" width="640" height="400"></canvas>
+          <div class="screen-glare" aria-hidden="true"></div>
+          <div class="game-message" id="game-message" hidden></div>
+        </div>
+        <div class="cabinet-bottom">
+          <div class="readout"><small>SCORE</small><strong id="score">000000</strong></div>
+          <div class="readout center"><small>FLOOR</small><strong id="floor">01 / 05</strong></div>
+          <div class="readout right"><small>TIME</small><strong id="timer">12:00</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mission-panel" id="mission-panel" hidden>
+      <div class="mission-heading">
+        <div>
+          <p class="eyebrow">ENCRYPTED RADIO ROOM</p>
+          <h2>Mission <button id="copy-code" class="code" title="Copy room code">----</button></h2>
+        </div>
+        <button class="text-button" id="leave-button">ABORT MISSION</button>
+      </div>
+
+      <div class="operator-grid">
+        <article class="operator-card movement-card" id="movement-card">
+          <div class="operator-number">01</div>
+          <div>
+            <p class="operator-kicker">MOVEMENT OPERATOR</p>
+            <h3>The Legs</h3>
+            <p>Navigate rooms, creep past patrols, search guards and chests.</p>
+            <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>MOVE</span><kbd>⇧</kbd><span>SNEAK</span><kbd>E</kbd><span>SEARCH</span></div>
+          </div>
+          <span class="operator-status">WAITING</span>
+        </article>
+        <div class="sync-mark"><span></span><b>SYNC</b><span></span></div>
+        <article class="operator-card weapons-card" id="weapons-card">
+          <div class="operator-number">02</div>
+          <div>
+            <p class="operator-kicker">WEAPONS OPERATOR</p>
+            <h3>The Arms</h3>
+            <p>Aim independently, fire the pistol, arc grenades.</p>
+            <div class="keys"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span>AIM</span><kbd>SPACE</kbd><span>FIRE</span><kbd>G</kbd><span>GRENADE</span></div>
+          </div>
+          <span class="operator-status">WAITING</span>
+        </article>
+      </div>
+
+      <div class="mission-footer">
+        <p id="mission-status">Share the code. The mission begins when both operators are online.</p>
+        <div class="objective"><span>OBJECTIVE</span> Find a key, recover the war plans, then reach the northern stairs.</div>
+      </div>
+    </section>
+
+    <section class="manual" id="manual">
+      <div class="manual-title">
+        <p class="eyebrow">FIELD MANUAL / REV. 1982</p>
+        <h2>Trust the other controller.</h2>
+      </div>
+      <div class="manual-steps">
+        <article><b>1</b><h3>Choose a role</h3><p>Be the operator who moves the agent or the one who handles weapons.</p></article>
+        <article><b>2</b><h3>Send the code</h3><p>Your partner opens this page anywhere and joins the same four-character room.</p></article>
+        <article><b>3</b><h3>Stay in sync</h3><p>The agent moves and aims independently. Talk, count corners, and watch your fire.</p></article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="mission-dialog">
+    <form method="dialog" class="dialog-card" id="mission-form">
+      <button class="dialog-close" value="cancel" aria-label="Close">×</button>
+      <p class="eyebrow" id="dialog-eyebrow">NEW MISSION</p>
+      <h2 id="dialog-title">Choose your controller.</h2>
+      <p id="dialog-copy">Your partner will take the other half of the agent.</p>
+      <label class="room-field" id="room-field" hidden>
+        <span>ROOM CODE</span>
+        <input id="room-code-input" type="text" inputmode="text" autocomplete="off" maxlength="4" placeholder="ABCD" aria-label="Four-character room code">
+      </label>
+      <fieldset>
+        <legend>YOUR ROLE</legend>
+        <label class="role-choice">
+          <input type="radio" name="role" value="movement" checked>
+          <span class="role-icon boot-icon" aria-hidden="true">↟</span>
+          <span><b>THE LEGS</b><small>Move · sneak · search</small></span>
+          <i></i>
+        </label>
+        <label class="role-choice">
+          <input type="radio" name="role" value="weapons">
+          <span class="role-icon aim-icon" aria-hidden="true">⌖</span>
+          <span><b>THE ARMS</b><small>Aim · shoot · throw</small></span>
+          <i></i>
+        </label>
+      </fieldset>
+      <button class="btn primary full" id="dialog-submit" value="default">CREATE ROOM <span>↗</span></button>
+      <p class="dialog-error" id="dialog-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/shared.js"></script>
+  <script src="/game.js"></script>
+</body>
+</html>
