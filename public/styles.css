@@ -12,6 +12,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html { background: var(--paper); color: var(--ink); }
 
@@ -176,6 +177,40 @@ h1 em { color: var(--red); font-weight: 400; }
   letter-spacing: .18em;
 }
 
+.mission-order {
+  min-height: 54px;
+  margin: 0 clamp(20px, 3vw, 42px) 14px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 18px;
+  border: 2px solid #5f6c63;
+  border-left: 7px solid var(--phosphor);
+  background: #07100e;
+  color: var(--paper);
+}
+
+.mission-order[hidden], .map-panel[hidden] { display: none; }
+
+.mission-order > span {
+  color: var(--phosphor);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .17em;
+  white-space: nowrap;
+}
+
+.mission-order > span b { display: block; margin-top: 5px; color: #778579; }
+.mission-order strong { font-size: clamp(8px, 1vw, 11px); line-height: 1.45; letter-spacing: .045em; }
+
+.play-deck {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .screen-wrap {
   position: relative;
   margin: 0 clamp(20px, 3vw, 42px);
@@ -188,6 +223,59 @@ h1 em { color: var(--red); font-weight: 400; }
   border: 5px solid #050a09;
   box-shadow: 0 0 0 2px #354039, 0 16px 35px #050a09;
 }
+
+.map-panel {
+  min-width: 0;
+  padding: 13px;
+  border: 2px solid #4d5a53;
+  background: #07100e;
+  align-self: stretch;
+  color: var(--paper-dim);
+}
+
+.map-heading, .map-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+
+.map-heading b { color: var(--phosphor); }
+.map-heading i { font-style: normal; }
+
+.map-screen {
+  position: relative;
+  margin: 12px 0;
+  padding: 5px;
+  border: 1px solid #354039;
+  background: #020609;
+  box-shadow: inset 0 0 18px rgba(219, 229, 108, .05);
+}
+
+.map-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px);
+}
+
+#minimap {
+  width: 100%;
+  height: auto;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.map-legend { justify-content: flex-start; flex-wrap: wrap; color: #778579; letter-spacing: .08em; }
+.map-legend span { display: flex; align-items: center; gap: 5px; }
+.map-legend i { width: 7px; height: 7px; display: inline-block; }
+.map-legend .map-you { background: var(--phosphor); box-shadow: 0 0 5px rgba(219, 229, 108, .45); }
+.map-legend .map-exit { border: 1px solid var(--red); }
 
 #game {
   width: 100%;
@@ -323,7 +411,10 @@ legend, .room-field span { display: block; margin-bottom: 10px; font-size: 8px; 
 
 body.in-mission .hero { grid-template-columns: 0 1fr; min-height: 690px; }
 body.in-mission .hero-copy { padding: 0; border: 0; opacity: 0; pointer-events: none; }
-body.in-mission .screen-wrap { min-height: 560px; }
+body.in-mission .mission-order { display: grid; }
+body.in-mission .play-deck { grid-template-columns: minmax(0, 1fr) 190px; gap: 18px; padding: 0 clamp(20px, 3vw, 42px); }
+body.in-mission .screen-wrap { min-height: 500px; margin: 0; }
+body.in-mission .map-panel { display: block; }
 body.in-mission .cabinet-top { min-height: 46px; }
 body.in-mission .manual { display: none; }
 
@@ -338,7 +429,9 @@ body.in-mission .manual { display: none; }
   .manual { grid-template-columns: 1fr; }
   body.in-mission .hero { grid-template-columns: 1fr; }
   body.in-mission .hero-copy { display: none; }
+  body.in-mission .play-deck { grid-template-columns: 1fr; gap: 14px; padding: 0 20px 20px; }
   body.in-mission .screen-wrap { min-height: auto; }
+  body.in-mission .map-panel { width: min(360px, 100%); justify-self: center; }
 }
 
 @media (max-width: 600px) {
@@ -349,6 +442,8 @@ body.in-mission .manual { display: none; }
   .cabinet-top { min-height: 48px; }
   .cabinet-top span:last-child { display: none; }
   .screen-wrap { margin: 0 12px; }
+  .mission-order { margin-inline: 12px; grid-template-columns: 1fr; gap: 6px; }
+  body.in-mission .play-deck { padding-inline: 12px; }
   .cabinet-bottom { padding-inline: 18px; }
   .mission-heading { align-items: flex-start; gap: 20px; }
   .operator-card { grid-template-columns: 1fr; padding: 25px 19px; }

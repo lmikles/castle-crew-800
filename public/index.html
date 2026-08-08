@@ -35,10 +35,29 @@
         <div class="cabinet-top">
           <span>ATARI 800 COMPATIBLE</span><span>CARTRIDGE No. 026</span>
         </div>
-        <div class="screen-wrap">
-          <canvas id="game" width="640" height="400"></canvas>
-          <div class="screen-glare" aria-hidden="true"></div>
-          <div class="game-message" id="game-message" hidden></div>
+        <div class="mission-order" id="mission-order" hidden>
+          <span>FIELD ORDER <b id="objective-step">01 / 03</b></span>
+          <strong id="objective-text">Find a key. Search guards and containers.</strong>
+        </div>
+        <div class="play-deck">
+          <div class="screen-wrap">
+            <canvas id="game" width="640" height="400"></canvas>
+            <div class="screen-glare" aria-hidden="true"></div>
+            <div class="game-message" id="game-message" hidden></div>
+          </div>
+          <aside class="map-panel" id="map-panel" hidden aria-label="Castle floor minimap">
+            <div class="map-heading">
+              <span>CASTLE PLAN</span>
+              <b>FL.<i id="map-floor">01</i></b>
+            </div>
+            <div class="map-screen">
+              <canvas id="minimap" width="200" height="125" role="img" aria-label="Map outline showing your current position and the northern stairs"></canvas>
+            </div>
+            <div class="map-legend">
+              <span><i class="map-you"></i>YOU</span>
+              <span><i class="map-exit"></i>STAIRS</span>
+            </div>
+          </aside>
         </div>
         <div class="cabinet-bottom">
           <div class="readout"><small>SCORE</small><strong id="score">000000</strong></div>

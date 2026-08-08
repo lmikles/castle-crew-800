@@ -3,7 +3,10 @@
 
   const canvas = document.querySelector("#game");
   const ctx = canvas.getContext("2d", { alpha: false });
+  const minimap = document.querySelector("#minimap");
+  const mapCtx = minimap.getContext("2d", { alpha: false });
   ctx.imageSmoothingEnabled = false;
+  mapCtx.imageSmoothingEnabled = false;
 
   const ui = {
     signal: document.querySelector("#signal"),
@@ -20,6 +23,11 @@
     roomInput: document.querySelector("#room-code-input"),
     mission: document.querySelector("#mission-panel"),
     missionStatus: document.querySelector("#mission-status"),
+    missionOrder: document.querySelector("#mission-order"),
+    objectiveStep: document.querySelector("#objective-step"),
+    objectiveText: document.querySelector("#objective-text"),
+    mapPanel: document.querySelector("#map-panel"),
+    mapFloor: document.querySelector("#map-floor"),
     copyCode: document.querySelector("#copy-code"),
     leave: document.querySelector("#leave-button"),
     movementCard: document.querySelector("#movement-card"),
@@ -168,9 +176,11 @@
       ui.dialog.close();
       ui.copyCode.textContent = roomCode;
       ui.mission.hidden = false;
+      ui.missionOrder.hidden = false;
+      ui.mapPanel.hidden = false;
       document.body.classList.add("in-mission");
       updateRoleCards();
-      ui.mission.scrollIntoView({ behavior: "smooth", block: "end" });
+      document.querySelector("#hero").scrollIntoView({ behavior: "smooth", block: "start" });
       history.replaceState(null, "", `?room=${roomCode}`);
       tone(220, .09, "square", .03, 110);
       setTimeout(() => tone(440, .12, "square", .025), 100);
@@ -209,6 +219,8 @@
       lastRoomNumber = message.room?.number || lastRoomNumber;
       gameState = message;
       updateHud();
+      updateObjective(message);
+      drawMinimap(message);
     }
   }
 
@@ -245,6 +257,82 @@
     } else {
       ui.gameMessage.hidden = true;
     }
+  }
+
+  function updateObjective(state) {
+    let step = 1;
+    let text = "Find a key. Search guards and containers.";
+    if ((state.player.keys || 0) > 0 && !state.player.intel) {
+      step = 2;
+      text = "Key acquired. Find and unlock the war plans chest.";
+    } else if (state.player.intel) {
+      step = 3;
+      text = "War plans secured. Reach the northern stairs.";
+    }
+    ui.objectiveStep.textContent = `0${step} / 03`;
+    ui.objectiveText.textContent = text;
+  }
+
+  function drawMinimap(state) {
+    const map = CastleShared.generateMap(state.level);
+    const width = minimap.width;
+    const height = minimap.height;
+    const padding = 8;
+    const scale = Math.min(
+      (width - padding * 2) / CastleShared.MAP_WIDTH,
+      (height - padding * 2) / CastleShared.MAP_HEIGHT
+    );
+    const offsetX = Math.floor((width - CastleShared.MAP_WIDTH * scale) / 2);
+    const offsetY = Math.floor((height - CastleShared.MAP_HEIGHT * scale) / 2);
+
+    mapCtx.fillStyle = "#020609";
+    mapCtx.fillRect(0, 0, width, height);
+
+    const room = state.room || roomOf(state.player);
+    mapCtx.fillStyle = "rgba(219, 229, 108, .07)";
+    mapCtx.fillRect(
+      offsetX + room.x * ROOM_WIDTH * scale,
+      offsetY + room.y * ROOM_HEIGHT * scale,
+      ROOM_WIDTH * scale,
+      ROOM_HEIGHT * scale
+    );
+    mapCtx.strokeStyle = "rgba(219, 229, 108, .42)";
+    mapCtx.lineWidth = 1;
+    mapCtx.strokeRect(
+      Math.round(offsetX + room.x * ROOM_WIDTH * scale) + .5,
+      Math.round(offsetY + room.y * ROOM_HEIGHT * scale) + .5,
+      Math.round(ROOM_WIDTH * scale) - 1,
+      Math.round(ROOM_HEIGHT * scale) - 1
+    );
+
+    for (let y = 0; y < CastleShared.MAP_HEIGHT; y += 1) {
+      for (let x = 0; x < CastleShared.MAP_WIDTH; x += 1) {
+        const tile = map[y][x];
+        const px = offsetX + x * scale;
+        const py = offsetY + y * scale;
+        if (tile === "#") {
+          mapCtx.fillStyle = "#677478";
+          mapCtx.fillRect(Math.floor(px), Math.floor(py), Math.ceil(scale), Math.ceil(scale));
+        } else if (tile === "+") {
+          mapCtx.fillStyle = "#dbe56c";
+          mapCtx.fillRect(Math.floor(px + scale * .3), Math.floor(py + scale * .3), Math.max(1, scale * .4), Math.max(1, scale * .4));
+        } else if (tile === "E") {
+          mapCtx.strokeStyle = "#c94b37";
+          mapCtx.lineWidth = 1.5;
+          mapCtx.strokeRect(Math.floor(px) - 1, Math.floor(py) - 1, Math.ceil(scale) + 2, Math.ceil(scale) + 2);
+        }
+      }
+    }
+
+    const playerX = offsetX + state.player.x * scale;
+    const playerY = offsetY + state.player.y * scale;
+    mapCtx.fillStyle = "#dbe56c";
+    mapCtx.fillRect(Math.round(playerX) - 2, Math.round(playerY) - 2, 5, 5);
+    mapCtx.fillStyle = "#f6f2e9";
+    mapCtx.fillRect(Math.round(playerX), Math.round(playerY), 1, 1);
+
+    ui.mapFloor.textContent = String(state.level).padStart(2, "0");
+    minimap.setAttribute("aria-label", `Floor ${state.level} map. You are in room ${room.number || 1}; the stairs are in the northeast room.`);
   }
 
   function updateRoleCardsFromConnected(connected) {
