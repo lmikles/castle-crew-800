@@ -26,12 +26,20 @@
     missionOrder: document.querySelector("#mission-order"),
     objectiveStep: document.querySelector("#objective-step"),
     objectiveText: document.querySelector("#objective-text"),
+    huntHealth: document.querySelector("#hunt-health"),
+    intruderHealth: document.querySelector("#intruder-health"),
+    guardHealth: document.querySelector("#guard-health"),
     mapPanel: document.querySelector("#map-panel"),
     mapFloor: document.querySelector("#map-floor"),
     copyCode: document.querySelector("#copy-code"),
     leave: document.querySelector("#leave-button"),
     movementCard: document.querySelector("#movement-card"),
     weaponsCard: document.querySelector("#weapons-card"),
+    guardMovementCard: document.querySelector("#guard-movement-card"),
+    guardWeaponsCard: document.querySelector("#guard-weapons-card"),
+    guardGrid: document.querySelector("#guard-operator-grid"),
+    intruderTeamLabel: document.querySelector("#intruder-team-label"),
+    guardTeamLabel: document.querySelector("#guard-team-label"),
     score: document.querySelector("#score"),
     floor: document.querySelector("#floor"),
     timer: document.querySelector("#timer"),
@@ -58,6 +66,7 @@
   let pendingAction = null;
   let roomCode = "";
   let myRole = "";
+  let myMode = "coop";
   let gameState = null;
   let lobbyState = null;
   let dialogMode = "create";
@@ -75,6 +84,20 @@
   const held = new Set();
   const impulses = { fire: 0, grenade: 0 };
   const gamepadHeld = { fire: false, grenade: false };
+
+  const HUNT_ROLES = ["intruder-movement", "intruder-weapons", "guard-movement", "guard-weapons"];
+
+  function isMovementRole(role = myRole) {
+    return role === "movement" || role.endsWith("-movement");
+  }
+
+  function isWeaponsRole(role = myRole) {
+    return role === "weapons" || role.endsWith("-weapons");
+  }
+
+  function roleTeam(role = myRole) {
+    return role.startsWith("guard-") ? "guard" : "intruder";
+  }
 
   function toast(message) {
     ui.toast.textContent = message;
@@ -172,28 +195,32 @@
     if (message.type === "joined") {
       roomCode = message.code;
       myRole = message.role;
-      sessionStorage.setItem("castleCrewMission", JSON.stringify({ code: roomCode, role: myRole }));
+      myMode = message.mode || "coop";
+      sessionStorage.setItem("castleCrewMission", JSON.stringify({ code: roomCode, role: myRole, mode: myMode }));
       ui.dialog.close();
       ui.copyCode.textContent = roomCode;
       ui.mission.hidden = false;
       ui.missionOrder.hidden = false;
       ui.mapPanel.hidden = false;
       document.body.classList.add("in-mission");
+      document.body.classList.toggle("versus-mode", myMode === "versus");
+      applyModePresentation();
       updateRoleCards();
       document.querySelector("#hero").scrollIntoView({ behavior: "smooth", block: "start" });
-      history.replaceState(null, "", `?room=${roomCode}`);
+      history.replaceState(null, "", `?room=${roomCode}&mode=${myMode}`);
       tone(220, .09, "square", .03, 110);
       setTimeout(() => tone(440, .12, "square", .025), 100);
       if (message.recovered) toast("MISSION LINK RECOVERED");
       return;
     }
     if (message.type === "lobby") {
+      myMode = message.mode || myMode;
       lobbyState = message;
       updateRoleCards();
       return;
     }
     if (message.type === "start") {
-      ui.missionStatus.textContent = "Both operators online. The castle is live.";
+      ui.missionStatus.textContent = message.mode === "versus" ? "All four operators online. The hunt is live." : "Both operators online. The castle is live.";
       tone(180, .1, "square", .035, 170);
       setTimeout(() => tone(360, .18, "square", .035, 180), 120);
       return;
@@ -224,42 +251,91 @@
     }
   }
 
+  function roleCards() {
+    return myMode === "versus"
+      ? {
+          "intruder-movement": ui.movementCard,
+          "intruder-weapons": ui.weaponsCard,
+          "guard-movement": ui.guardMovementCard,
+          "guard-weapons": ui.guardWeaponsCard
+        }
+      : { movement: ui.movementCard, weapons: ui.weaponsCard };
+  }
+
+  function applyModePresentation() {
+    const hunt = myMode === "versus";
+    ui.huntHealth.hidden = !hunt;
+    ui.guardGrid.hidden = !hunt;
+    ui.intruderTeamLabel.hidden = !hunt;
+    ui.guardTeamLabel.hidden = !hunt;
+    const movementKicker = ui.movementCard.querySelector(".operator-kicker");
+    const weaponsKicker = ui.weaponsCard.querySelector(".operator-kicker");
+    movementKicker.textContent = hunt ? "INTRUDER MOVEMENT" : "MOVEMENT OPERATOR";
+    weaponsKicker.textContent = hunt ? "INTRUDER WEAPONS" : "WEAPONS OPERATOR";
+    ui.movementCard.querySelector("h3").textContent = hunt ? "Intruder Legs" : "The Legs";
+    ui.weaponsCard.querySelector("h3").textContent = hunt ? "Intruder Arms" : "The Arms";
+    document.querySelector(".mission-footer .objective").innerHTML = hunt
+      ? "<span>OBJECTIVE</span> Hunt the opposing team. Search chests for healing moonshine."
+      : "<span>OBJECTIVE</span> Find a key, recover the war plans, then reach the northern stairs.";
+    ui.mapPanel.querySelector(".map-legend span:last-child").lastChild.textContent = hunt ? "MOONSHINE" : "STAIRS";
+  }
+
   function updateRoleCards() {
-    const players = lobbyState?.players || lobbyState?.connected || { movement: myRole === "movement", weapons: myRole === "weapons" };
-    for (const role of ["movement", "weapons"]) {
-      const card = role === "movement" ? ui.movementCard : ui.weaponsCard;
+    const cards = roleCards();
+    const players = lobbyState?.players || lobbyState?.connected || Object.fromEntries(Object.keys(cards).map((role) => [role, myRole === role]));
+    for (const [role, card] of Object.entries(cards)) {
       const online = Boolean(players[role]);
       card.classList.toggle("online", online);
       card.classList.toggle("you", myRole === role);
       card.querySelector(".operator-status").textContent = online ? "ONLINE" : "WAITING";
     }
-    if (players.movement && players.weapons) ui.missionStatus.textContent = "Both operators online. The castle is live.";
-    else if (myRole) ui.missionStatus.textContent = `You are ${myRole === "movement" ? "the Legs" : "the Arms"}. Share ${roomCode} with your partner.`;
+    const ready = Object.keys(cards).every((role) => players[role]);
+    if (ready) ui.missionStatus.textContent = myMode === "versus" ? "All four operators online. The hunt is live." : "Both operators online. The castle is live.";
+    else if (myRole) {
+      const count = Object.values(players).filter(Boolean).length;
+      ui.missionStatus.textContent = myMode === "versus"
+        ? `You are ${myRole.replace("-", " ")}. ${count}/4 operators online — share ${roomCode}.`
+        : `You are ${myRole === "movement" ? "the Legs" : "the Arms"}. Share ${roomCode} with your partner.`;
+    }
   }
 
   function updateHud() {
     if (!gameState) return;
     ui.score.textContent = String(gameState.score).padStart(6, "0");
-    ui.floor.textContent = `${String(gameState.level).padStart(2, "0")} / 05`;
+    ui.floor.textContent = gameState.mode === "versus" ? "MANHUNT" : `${String(gameState.level).padStart(2, "0")} / 05`;
     const seconds = Math.max(0, Math.ceil(gameState.time));
     ui.timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-    const both = gameState.connected.movement && gameState.connected.weapons;
     updateRoleCardsFromConnected(gameState.connected);
-    if (!both && roomCode) {
+    const required = gameState.mode === "versus" ? HUNT_ROLES : ["movement", "weapons"];
+    const ready = required.every((role) => gameState.connected[role]);
+    if (gameState.mode === "versus" && gameState.health) {
+      const healthGlyphs = (value) => "■".repeat(value) + "□".repeat(Math.max(0, gameState.health.max - value));
+      ui.intruderHealth.textContent = healthGlyphs(gameState.health.intruder);
+      ui.guardHealth.textContent = healthGlyphs(gameState.health.guard);
+    }
+    if (!ready && roomCode) {
       ui.gameMessage.hidden = false;
-      ui.gameMessage.textContent = "AWAITING SECOND OPERATOR…";
+      ui.gameMessage.textContent = gameState.mode === "versus" ? "AWAITING FOUR OPERATORS…" : "AWAITING SECOND OPERATOR…";
     } else if (gameState.flash) {
       ui.gameMessage.hidden = false;
       ui.gameMessage.textContent = gameState.flash;
     } else if (["won", "lost"].includes(gameState.status)) {
       ui.gameMessage.hidden = false;
-      ui.gameMessage.textContent = gameState.status === "won" ? "CASTLE CLEARED — PRESS R TO PLAY AGAIN" : "MISSION FAILED — PRESS R TO REGROUP";
+      ui.gameMessage.textContent = gameState.mode === "versus"
+        ? (gameState.status === "won" ? "YOUR TEAM WINS — PRESS R FOR REMATCH" : "YOUR TEAM IS DOWN — PRESS R FOR REMATCH")
+        : (gameState.status === "won" ? "CASTLE CLEARED — PRESS R TO PLAY AGAIN" : "MISSION FAILED — PRESS R TO REGROUP");
     } else {
       ui.gameMessage.hidden = true;
     }
   }
 
   function updateObjective(state) {
+    if (state.mode === "versus") {
+      const enemy = state.viewerTeam === "guard" ? "intruders" : "guards";
+      ui.objectiveStep.textContent = "MANHUNT";
+      ui.objectiveText.textContent = `Track and eliminate the ${enemy}. Hold E at moonshine chests to restore health.`;
+      return;
+    }
     let step = 1;
     let text = "Find a key. Search guards and containers.";
     if ((state.player.keys || 0) > 0 && !state.player.intel) {
@@ -324,6 +400,19 @@
       }
     }
 
+    if (state.mode === "versus") {
+      mapCtx.fillStyle = "#b56d6d";
+      for (const chest of state.chests || []) {
+        if (chest.opened) continue;
+        mapCtx.fillRect(
+          Math.round(offsetX + chest.x * scale) - 1,
+          Math.round(offsetY + chest.y * scale) - 1,
+          3,
+          3
+        );
+      }
+    }
+
     const playerX = offsetX + state.player.x * scale;
     const playerY = offsetY + state.player.y * scale;
     mapCtx.fillStyle = "#dbe56c";
@@ -332,17 +421,38 @@
     mapCtx.fillRect(Math.round(playerX), Math.round(playerY), 1, 1);
 
     ui.mapFloor.textContent = String(state.level).padStart(2, "0");
-    minimap.setAttribute("aria-label", `Floor ${state.level} map. You are in room ${room.number || 1}; the stairs are in the northeast room.`);
+    minimap.setAttribute("aria-label", state.mode === "versus"
+      ? `Manhunt map. You are in room ${room.number || 1}; unopened moonshine chests are marked in red.`
+      : `Floor ${state.level} map. You are in room ${room.number || 1}; the stairs are in the northeast room.`);
   }
 
   function updateRoleCardsFromConnected(connected) {
     if (!connected) return;
-    for (const role of ["movement", "weapons"]) {
-      const card = role === "movement" ? ui.movementCard : ui.weaponsCard;
+    for (const [role, card] of Object.entries(roleCards())) {
       card.classList.toggle("online", connected[role]);
       card.classList.toggle("you", myRole === role);
       card.querySelector(".operator-status").textContent = connected[role] ? "ONLINE" : "WAITING";
     }
+  }
+
+  function syncModeChoices(gameMode, preferredRole = "") {
+    const normalized = gameMode === "versus" ? "versus" : "coop";
+    const modeInput = ui.form.querySelector(`input[name="mode"][value="${normalized}"]`);
+    if (modeInput) modeInput.checked = true;
+    const available = [];
+    for (const choice of ui.form.querySelectorAll(".role-choice[data-mode]")) {
+      const visible = choice.dataset.mode === normalized;
+      choice.hidden = !visible;
+      const input = choice.querySelector("input[name='role']");
+      input.disabled = !visible;
+      if (visible) available.push(input);
+    }
+    const preferred = available.find((input) => input.value === preferredRole);
+    const current = available.find((input) => input.checked);
+    (preferred || current || available[0]).checked = true;
+    ui.dialogCopy.textContent = normalized === "versus"
+      ? "Four operators control two bodies. Choose your side and controller."
+      : (dialogMode === "join" ? "Enter the four-character code from your partner." : "Your partner will take the other half of the agent.");
   }
 
   function openDialog(mode) {
@@ -351,13 +461,13 @@
     ui.roomField.hidden = mode !== "join";
     ui.dialogEyebrow.textContent = mode === "join" ? "JOIN MISSION" : "NEW MISSION";
     ui.dialogTitle.textContent = mode === "join" ? "Tune to their room." : "Choose your controller.";
-    ui.dialogCopy.textContent = mode === "join" ? "Enter the four-character code from your partner." : "Your partner will take the other half of the agent.";
     ui.dialogSubmit.firstChild.textContent = mode === "join" ? "JOIN ROOM " : "CREATE ROOM ";
-    const queryCode = new URLSearchParams(location.search).get("room");
+    const params = new URLSearchParams(location.search);
+    const queryCode = params.get("room");
     if (queryCode && mode === "join") ui.roomInput.value = queryCode.slice(0, 4).toUpperCase();
-    const invitedRole = new URLSearchParams(location.search).get("role");
-    const roleChoice = ui.form.querySelector(`input[name="role"][value="${invitedRole}"]`);
-    if (roleChoice && mode === "join") roleChoice.checked = true;
+    const invitedRole = params.get("role") || "";
+    const invitedMode = params.get("mode") === "versus" ? "versus" : "coop";
+    syncModeChoices(mode === "join" ? invitedMode : "coop", mode === "join" ? invitedRole : "");
     ui.dialog.showModal();
     if (mode === "join") setTimeout(() => ui.roomInput.focus(), 50);
   }
@@ -367,24 +477,31 @@
   ui.roomInput.addEventListener("input", () => {
     ui.roomInput.value = ui.roomInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
   });
+  ui.form.querySelector("#mode-fieldset").addEventListener("change", (event) => {
+    if (event.target.name === "mode") syncModeChoices(event.target.value);
+  });
   ui.form.addEventListener("submit", (event) => {
     event.preventDefault();
     initAudio();
-    const role = new FormData(ui.form).get("role");
+    const formData = new FormData(ui.form);
+    const role = formData.get("role");
+    const mode = formData.get("mode");
     if (dialogMode === "join") {
       const code = ui.roomInput.value.trim().toUpperCase();
       if (code.length !== 4) {
         ui.dialogError.textContent = "A room code has four characters.";
         return;
       }
-      send({ type: "join", code, role });
-    } else send({ type: "create", role });
+      send({ type: "join", code, role, mode });
+    } else send({ type: "create", role, mode });
   });
   ui.copyCode.addEventListener("click", async () => {
     const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
     const inviteOrigin = localHost && lanOrigin ? lanOrigin : location.origin;
     const partnerRole = myRole === "movement" ? "weapons" : "movement";
-    const shareUrl = `${inviteOrigin}${location.pathname}?room=${roomCode}&role=${partnerRole}`;
+    const shareUrl = myMode === "versus"
+      ? `${inviteOrigin}${location.pathname}?room=${roomCode}&mode=versus`
+      : `${inviteOrigin}${location.pathname}?room=${roomCode}&mode=coop&role=${partnerRole}`;
     try { await navigator.clipboard.writeText(`Join my Castle Crew mission: ${roomCode}\n${shareUrl}`); toast("INVITE COPIED"); }
     catch { await navigator.clipboard.writeText(roomCode); toast("CODE COPIED"); }
     tone(520, .08, "square", .025, 160);
@@ -404,11 +521,11 @@
     if (!roomCode) return;
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
     held.add(event.code);
-    if (!event.repeat && myRole === "weapons" && event.code === "Space") {
+    if (!event.repeat && isWeaponsRole() && event.code === "Space") {
       impulses.fire = 1;
       sendControls();
     }
-    if (!event.repeat && myRole === "weapons" && (event.code === "KeyG" || event.code === "Enter")) {
+    if (!event.repeat && isWeaponsRole() && (event.code === "KeyG" || event.code === "Enter")) {
       impulses.grenade = 1;
       sendControls();
     }
@@ -440,7 +557,7 @@
 
   function collectInput() {
     const pad = gamepadInput();
-    if (myRole === "movement") {
+    if (isMovementRole()) {
       return {
         up: held.has("KeyW") || pad?.up,
         down: held.has("KeyS") || pad?.down,
@@ -602,6 +719,29 @@
     if (player.searching) tinyText("SEARCH", x, y - 39, PALETTE.glow, "center", 8);
   }
 
+  function drawVersusActor(actor, room, opponent = false) {
+    const { x, y } = screenPoint(actor, room);
+    if (actor.invulnerable > 0 && Math.floor(performance.now() / 80) % 2) return;
+    const facing = actor.aimX < 0 ? -1 : 1;
+    const guard = actor.team === "guard";
+    const coat = guard ? PALETTE.red : PALETTE.paper;
+    const trim = guard ? PALETTE.paper : PALETTE.blue;
+    rect(x - 10, y - 15, 20, 25, coat);
+    rect(x - 7, y - 29, 14, 13, PALETTE.paper);
+    rect(x - 11, y - 32, 22, 6, trim);
+    rect(x - 9, y + 9, 7, 14, coat);
+    rect(x + 2, y + 9, 7, 14, coat);
+    rect(x - 12, y + 21, 10, 4, PALETTE.paper);
+    rect(x + 2, y + 21, 10, 4, PALETTE.paper);
+    const handX = x + actor.aimX * 18;
+    const handY = y - 6 + actor.aimY * 18;
+    rect(handX - 4, handY - 4, 8, 8, PALETTE.paper);
+    rect(handX, handY - 2, facing * 17, 4, PALETTE.paper);
+    rect(handX + facing * 14, handY - 1, facing * 7, 3, trim);
+    if (opponent) tinyText(guard ? "GUARD" : "INTRUDER", x, y - 40, guard ? PALETTE.red : PALETTE.white, "center", 8);
+    if (actor.searching) tinyText("DRINK", x, y - 40, PALETTE.glow, "center", 8);
+  }
+
   function drawGuard(enemy, room) {
     const { x, y } = screenPoint(enemy, room);
     if (enemy.health <= 0) {
@@ -648,6 +788,7 @@
       rect(x - 20, y + 26, 40, 4, PALETTE.mortar);
       rect(x - 20, y + 26, 40 * Math.min(1, chest.searchProgress / .9), 4, PALETTE.white);
     }
+    if (chest.content === "moonshine" && !chest.opened) tinyText("XXX", x, y + 6, PALETTE.red, "center", 8);
   }
 
   function drawProjectile(item, room, color, size = 4) {
@@ -665,9 +806,14 @@
 
   function drawGameHud(state) {
     rect(0, 365, 640, 35, PALETTE.deepest);
-    tinyText(`LIFE ${"■".repeat(state.player.health)}${"□".repeat(Math.max(0, 4 - state.player.health))}`, 24, 386, PALETTE.paper, "left", 10);
+    const maxHealth = state.player.maxHealth || 4;
+    tinyText(`LIFE ${"■".repeat(state.player.health)}${"□".repeat(Math.max(0, maxHealth - state.player.health))}`, 24, 386, PALETTE.paper, "left", 10);
     tinyText(`AMMO ${String(state.player.ammo).padStart(2, "0")}`, 155, 386, PALETTE.paper, "left", 10);
     tinyText(`GREN ${String(state.player.grenades).padStart(2, "0")}`, 260, 386, PALETTE.paper, "left", 10);
+    if (state.mode === "versus") {
+      tinyText(state.viewerTeam === "guard" ? "GUARD UNIT" : "INTRUDER UNIT", 615, 386, state.viewerTeam === "guard" ? PALETTE.red : PALETTE.glow, "right", 9);
+      return;
+    }
     tinyText(`KEY ${state.player.keys || 0}`, 365, 386, PALETTE.paper, "left", 10);
     tinyText(state.player.disguise ? "UNIFORM" : "PRISONER", 445, 386, state.player.disguise ? PALETTE.glow : PALETTE.mortar, "left", 9);
     tinyText(state.player.intel ? "PLANS!" : "NO PLANS", 615, 386, state.player.intel ? PALETTE.white : PALETTE.mortar, "right", 9);
@@ -677,14 +823,19 @@
     const map = CastleShared.generateMap(state.level);
     const room = { ...(state.room || roomOf(state.player)), floor: state.level };
     if (!room.number) room.number = (state.level - 1) * 12 + room.y * 4 + room.x + 1;
-    drawRoom(map, room, state.player.intel);
+    drawRoom(map, room, state.mode === "versus" ? false : state.player.intel);
     for (const chest of state.chests || []) if (visibleInRoom(chest, room)) drawChest(chest, room);
-    for (const enemy of state.enemies || []) if (visibleInRoom(enemy, room)) drawGuard(enemy, room);
+    if (state.mode === "versus") {
+      if (state.opponent && visibleInRoom(state.opponent, room)) drawVersusActor(state.opponent, room, true);
+    } else {
+      for (const enemy of state.enemies || []) if (visibleInRoom(enemy, room)) drawGuard(enemy, room);
+    }
     for (const bullet of state.bullets || []) if (visibleInRoom(bullet, room)) drawProjectile(bullet, room, PALETTE.white, 5);
     for (const bullet of state.enemyBullets || []) if (visibleInRoom(bullet, room)) drawProjectile(bullet, room, PALETTE.red, 5);
     for (const grenade of state.thrown || []) if (visibleInRoom(grenade, room)) drawProjectile(grenade, room, Math.floor(grenade.fuse * 8) % 2 ? PALETTE.white : PALETTE.blue, 8);
     for (const explosion of state.explosions || []) if (visibleInRoom(explosion, room)) drawExplosion(explosion, room);
-    drawPlayer(state.player, room);
+    if (state.mode === "versus") drawVersusActor(state.player, room);
+    else drawPlayer(state.player, room);
     drawGameHud(state);
 
     const transitionAge = performance.now() - roomChangeAt;
@@ -721,10 +872,11 @@
   }
 
   const invitedCode = new URLSearchParams(location.search).get("room")?.toUpperCase();
+  const invitedMode = new URLSearchParams(location.search).get("mode") === "versus" ? "versus" : "coop";
   let savedMission = null;
   try { savedMission = JSON.parse(sessionStorage.getItem("castleCrewMission")); } catch { savedMission = null; }
   if (invitedCode && savedMission?.code === invitedCode && savedMission?.role) {
-    pendingAction = { type: "join", code: invitedCode, role: savedMission.role };
+    pendingAction = { type: "join", code: invitedCode, role: savedMission.role, mode: savedMission.mode || invitedMode };
   } else if (invitedCode) setTimeout(() => openDialog("join"), 250);
   if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
     fetch("/api/network").then((response) => response.json()).then((data) => {

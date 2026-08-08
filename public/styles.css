@@ -204,6 +204,18 @@ h1 em { color: var(--red); font-weight: 400; }
 .mission-order > span b { display: block; margin-top: 5px; color: #778579; }
 .mission-order strong { font-size: clamp(8px, 1vw, 11px); line-height: 1.45; letter-spacing: .045em; }
 
+.hunt-health {
+  display: grid;
+  gap: 6px;
+  padding-left: 16px;
+  border-left: 1px solid #4d5a53;
+}
+
+.hunt-health > div { display: grid; grid-template-columns: 78px 1fr; align-items: center; gap: 8px; }
+.hunt-health span { color: #778579; font-size: 7px; font-weight: 900; letter-spacing: .08em; }
+.hunt-health b { color: var(--phosphor); font-size: 11px; letter-spacing: .08em; white-space: nowrap; }
+.hunt-health > div:last-child b { color: var(--red); }
+
 .play-deck {
   flex: 1;
   min-height: 0;
@@ -339,6 +351,9 @@ h1 em { color: var(--red); font-weight: 400; }
 .text-button { border: 0; border-bottom: 1px solid; background: none; padding: 4px 0; cursor: pointer; font-size: 9px; font-weight: 900; letter-spacing: .1em; }
 
 .operator-grid { display: grid; grid-template-columns: 1fr 70px 1fr; align-items: stretch; }
+.team-label { margin: 28px 0 10px; font-size: 8px; font-weight: 900; letter-spacing: .2em; color: var(--olive); }
+.guard-label { color: var(--red); }
+.guard-operator-grid { margin-bottom: 8px; }
 .operator-card {
   min-height: 230px;
   border: 3px solid var(--ink);
@@ -350,6 +365,7 @@ h1 em { color: var(--red); font-weight: 400; }
   transition: background .2s ease, color .2s ease;
 }
 .operator-card.online { background: var(--ink); color: var(--paper); }
+.operator-card.guard-card.online { background: #321b18; }
 .operator-card.you::after { content: "YOU"; position: absolute; top: -13px; left: 21px; background: var(--red); color: #fff; padding: 6px 10px; border: 2px solid var(--ink); font-size: 8px; font-weight: bold; }
 .operator-number { font: italic 700 43px/1 Georgia, serif; color: var(--red); }
 .operator-kicker { color: var(--rust); margin: 2px 0 8px; font-size: 8px; font-weight: 900; letter-spacing: .16em; }
@@ -384,6 +400,8 @@ dialog {
   background: var(--paper);
   color: var(--ink);
   box-shadow: 12px 12px 0 var(--ink);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
 }
 dialog::backdrop { background: rgba(8, 17, 15, .82); backdrop-filter: blur(4px); }
 .dialog-card { padding: clamp(28px, 6vw, 48px); position: relative; }
@@ -391,11 +409,19 @@ dialog::backdrop { background: rgba(8, 17, 15, .82); backdrop-filter: blur(4px);
 .dialog-close { position: absolute; right: 15px; top: 12px; background: none; border: 0; font-size: 30px; cursor: pointer; }
 fieldset { margin: 24px 0; padding: 0; border: 0; }
 legend, .room-field span { display: block; margin-bottom: 10px; font-size: 8px; font-weight: bold; letter-spacing: .16em; }
+.mode-fieldset { margin-bottom: 18px; }
+.mode-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mode-choice { display: block; position: relative; border: 2px solid var(--ink); padding: 12px; cursor: pointer; }
+.mode-choice input { position: absolute; opacity: 0; }
+.mode-choice:has(input:checked) { background: var(--ink); color: var(--paper); box-shadow: inset 0 -4px var(--phosphor); }
+.mode-choice b, .mode-choice small { display: block; }
+.mode-choice b { margin-bottom: 5px; font-size: 9px; letter-spacing: .05em; }
+.mode-choice small { font-size: 7px; line-height: 1.4; opacity: .68; }
 .room-field { display: block; margin: 25px 0 5px; }
 .room-field input { width: 100%; border: 3px solid var(--ink); background: #f7edcb; padding: 13px; text-transform: uppercase; font-size: 24px; letter-spacing: .45em; text-align: center; outline: 0; }
 .room-field input:focus { box-shadow: 4px 4px 0 var(--red); }
-.role-choice { display: grid; grid-template-columns: 48px 1fr 18px; align-items: center; gap: 12px; border: 2px solid var(--ink); border-bottom: 0; padding: 12px; cursor: pointer; }
-.role-choice:last-child { border-bottom: 2px solid var(--ink); }
+.role-choice { display: grid; grid-template-columns: 48px 1fr 18px; align-items: center; gap: 12px; border: 2px solid var(--ink); margin-top: -2px; padding: 12px; cursor: pointer; }
+.role-choice.guard-choice:has(input:checked) { background: #321b18; }
 .role-choice:has(input:checked) { background: var(--ink); color: var(--paper); }
 .role-choice input { position: absolute; opacity: 0; }
 .role-choice b, .role-choice small { display: block; }
@@ -417,6 +443,7 @@ body.in-mission .screen-wrap { min-height: 500px; margin: 0; }
 body.in-mission .map-panel { display: block; }
 body.in-mission .cabinet-top { min-height: 46px; }
 body.in-mission .manual { display: none; }
+body.versus-mode .mission-order { grid-template-columns: auto minmax(220px, 1fr) minmax(250px, .72fr); }
 
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; }
@@ -432,6 +459,8 @@ body.in-mission .manual { display: none; }
   body.in-mission .play-deck { grid-template-columns: 1fr; gap: 14px; padding: 0 20px 20px; }
   body.in-mission .screen-wrap { min-height: auto; }
   body.in-mission .map-panel { width: min(360px, 100%); justify-self: center; }
+  body.versus-mode .mission-order { grid-template-columns: 1fr; }
+  body.versus-mode .hunt-health { padding: 10px 0 0; border-left: 0; border-top: 1px solid #4d5a53; }
 }
 
 @media (max-width: 600px) {
@@ -444,6 +473,7 @@ body.in-mission .manual { display: none; }
   .screen-wrap { margin: 0 12px; }
   .mission-order { margin-inline: 12px; grid-template-columns: 1fr; gap: 6px; }
   body.in-mission .play-deck { padding-inline: 12px; }
+  .mode-choices { grid-template-columns: 1fr; }
   .cabinet-bottom { padding-inline: 18px; }
   .mission-heading { align-items: flex-start; gap: 20px; }
   .operator-card { grid-template-columns: 1fr; padding: 25px 19px; }

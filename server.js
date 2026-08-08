@@ -13,6 +13,20 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const TICK_RATE = 30;
 const BROADCAST_RATE = 15;
 const rooms = new Map();
+const COOP_ROLES = ["movement", "weapons"];
+const HUNT_ROLES = ["intruder-movement", "intruder-weapons", "guard-movement", "guard-weapons"];
+
+function normalizeMode(mode) {
+  return mode === "versus" ? "versus" : "coop";
+}
+
+function rolesForMode(mode) {
+  return mode === "versus" ? HUNT_ROLES : COOP_ROLES;
+}
+
+function teamForRole(role) {
+  return String(role).startsWith("guard-") ? "guard" : "intruder";
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -135,12 +149,63 @@ function makeGame() {
   };
 }
 
-function makeRoom(code) {
+function makeHunter(team, x, y, aimX) {
+  return {
+    team, x, y, aimX, aimY: 0, health: 6, maxHealth: 6,
+    ammo: 99, grenades: 5, invulnerable: 0, firing: 0, searching: false
+  };
+}
+
+function makeHuntGame() {
+  const map = Shared.generateMap(1);
+  const chestSpots = [];
+  for (let y = 0; y < map.length; y += 1) {
+    for (let x = 0; x < map[y].length; x += 1) {
+      if (map[y][x] === "C") chestSpots.push([x + 0.5, y + 0.5]);
+    }
+  }
+  for (let i = chestSpots.length - 1; i > 0; i -= 1) {
+    const swap = crypto.randomInt(i + 1);
+    [chestSpots[i], chestSpots[swap]] = [chestSpots[swap], chestSpots[i]];
+  }
+  const chests = chestSpots.slice(0, Math.min(12, chestSpots.length)).map(([x, y], id) => ({
+    id, x, y, opened: false, searched: false, searchProgress: 0,
+    searchingTeam: null, locked: false, content: "moonshine"
+  }));
+  return {
+    mode: "versus",
+    status: "waiting",
+    winner: null,
+    level: 1,
+    time: 600,
+    score: 0,
+    alert: 0,
+    flash: "",
+    flashUntil: 0,
+    map,
+    actors: {
+      intruder: makeHunter("intruder", 2.5, Shared.MAP_HEIGHT - 2.5, 1),
+      guard: makeHunter("guard", Shared.MAP_WIDTH - 2.5, 2.5, -1)
+    },
+    bullets: [],
+    thrown: [],
+    explosions: [],
+    chests,
+    enemies: [],
+    intel: [],
+    ammo: []
+  };
+}
+
+function makeRoom(code, mode = "coop") {
+  const normalizedMode = normalizeMode(mode);
+  const roles = rolesForMode(normalizedMode);
   return {
     code,
-    sockets: { movement: null, weapons: null },
-    inputs: { movement: makeInput(), weapons: makeInput() },
-    game: makeGame(),
+    mode: normalizedMode,
+    sockets: Object.fromEntries(roles.map((role) => [role, null])),
+    inputs: Object.fromEntries(roles.map((role) => [role, makeInput()])),
+    game: normalizedMode === "versus" ? makeHuntGame() : makeGame(),
     emptySince: null,
     lastBroadcast: 0
   };
@@ -150,10 +215,8 @@ function serializeLobby(room) {
   return {
     type: "lobby",
     code: room.code,
-    players: {
-      movement: Boolean(room.sockets.movement),
-      weapons: Boolean(room.sockets.weapons)
-    },
+    mode: room.mode,
+    players: Object.fromEntries(Object.entries(room.sockets).map(([role, socket]) => [role, Boolean(socket)])),
     status: room.game.status
   };
 }
@@ -169,33 +232,34 @@ function announce(room, text, duration = 2.2) {
 
 function maybeStart(room) {
   broadcast(room, serializeLobby(room));
-  if (room.sockets.movement && room.sockets.weapons && room.game.status === "waiting") {
-    room.game = makeGame();
+  const ready = rolesForMode(room.mode).every((role) => room.sockets[role]);
+  if (ready && room.game.status === "waiting") {
+    room.game = room.mode === "versus" ? makeHuntGame() : makeGame();
     room.game.status = "playing";
-    announce(room, "BOTH OPERATORS ONLINE — INFILTRATE!", 3);
-    broadcast(room, { type: "start", code: room.code });
+    announce(room, room.mode === "versus" ? "ALL FOUR ONLINE — THE HUNT BEGINS!" : "BOTH OPERATORS ONLINE — INFILTRATE!", 3);
+    broadcast(room, { type: "start", code: room.code, mode: room.mode });
   }
 }
 
-function claimRoom(ws, code, role, recoverMissing = false) {
+function claimRoom(ws, code, role, recoverMissing = false, requestedMode = "coop") {
   let room = rooms.get(code);
   let recovered = false;
   if (!room && recoverMissing && /^[A-Z0-9]{4}$/.test(code)) {
-    room = makeRoom(code);
+    room = makeRoom(code, requestedMode);
     rooms.set(code, room);
     recovered = true;
   }
   if (!room) return send(ws, { type: "error", message: "No mission uses that code." });
-  if (!["movement", "weapons"].includes(role)) return send(ws, { type: "error", message: "Choose an operator role." });
+  if (!rolesForMode(room.mode).includes(role)) return send(ws, { type: "error", message: `Choose a ${room.mode === "versus" ? "Manhunt" : "mission"} operator role.` });
   if (room.sockets[role] && room.sockets[role] !== ws) {
-    return send(ws, { type: "error", message: `${role === "movement" ? "Movement" : "Weapons"} is already occupied.` });
+    return send(ws, { type: "error", message: "That controller is already occupied." });
   }
   if (ws.room && ws.role) ws.room.sockets[ws.role] = null;
   room.sockets[role] = ws;
   room.emptySince = null;
   ws.room = room;
   ws.role = role;
-  send(ws, { type: "joined", code, role, recovered });
+  send(ws, { type: "joined", code, role, mode: room.mode, recovered });
   maybeStart(room);
 }
 
@@ -206,13 +270,13 @@ wss.on("connection", (ws) => {
     try { message = JSON.parse(raw); } catch { return; }
     if (message.type === "create") {
       const code = roomCode();
-      const room = makeRoom(code);
+      const room = makeRoom(code, message.mode);
       rooms.set(code, room);
       claimRoom(ws, code, message.role);
       return;
     }
     if (message.type === "join") {
-      claimRoom(ws, String(message.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4), message.role, true);
+      claimRoom(ws, String(message.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4), message.role, true, message.mode);
       return;
     }
     if (!ws.room || !ws.role) return;
@@ -223,10 +287,10 @@ wss.on("connection", (ws) => {
       input.fire = Math.max(input.fire, Number(next.fire) || 0);
       input.grenade = Math.max(input.grenade, Number(next.grenade) || 0);
     }
-    if (message.type === "restart" && ["won", "lost"].includes(ws.room.game.status)) {
-      ws.room.game = makeGame();
+    if (message.type === "restart" && (["won", "lost", "finished"].includes(ws.room.game.status))) {
+      ws.room.game = ws.room.mode === "versus" ? makeHuntGame() : makeGame();
       ws.room.game.status = "playing";
-      announce(ws.room, "SECOND ATTEMPT — STAY SHARP!", 2.5);
+      announce(ws.room, ws.room.mode === "versus" ? "REMATCH — HUNT!" : "SECOND ATTEMPT — STAY SHARP!", 2.5);
     }
   });
   ws.on("close", () => {
@@ -236,7 +300,7 @@ wss.on("connection", (ws) => {
       room.sockets[ws.role] = null;
       room.inputs[ws.role] = makeInput();
     }
-    if (!room.sockets.movement && !room.sockets.weapons) room.emptySince = Date.now();
+    if (!Object.values(room.sockets).some(Boolean)) room.emptySince = Date.now();
     else broadcast(room, serializeLobby(room));
   });
 });
@@ -559,11 +623,185 @@ function updateGame(room, dt) {
   if (game.flash && Date.now() / 1000 > game.flashUntil) game.flash = "";
 }
 
-function publicState(room) {
+function damageHunter(room, team, amount = 1) {
   const game = room.game;
+  const actor = game.actors[team];
+  if (actor.invulnerable > 0 || actor.health <= 0) return;
+  actor.health = Math.max(0, actor.health - amount);
+  actor.invulnerable = 0.72;
+  announce(room, `${team === "guard" ? "GUARD" : "INTRUDER"} HIT!`, 1);
+  if (actor.health <= 0) {
+    game.status = "finished";
+    game.winner = team === "guard" ? "intruder" : "guard";
+    announce(room, `${game.winner === "guard" ? "GUARDS" : "INTRUDERS"} WIN — PRESS R FOR REMATCH`, 999);
+  }
+}
+
+function updateMoonshine(room, team, active, dt) {
+  const game = room.game;
+  const actor = game.actors[team];
+  actor.searching = false;
+  const target = game.chests
+    .filter((chest) => !chest.opened && sameRoom(chest, actor) && Math.hypot(chest.x - actor.x, chest.y - actor.y) < 1.3)
+    .sort((a, b) => Math.hypot(a.x - actor.x, a.y - actor.y) - Math.hypot(b.x - actor.x, b.y - actor.y))[0];
+  for (const chest of game.chests) {
+    if (chest.searchingTeam === team && chest !== target) {
+      chest.searchingTeam = null;
+      chest.searchProgress = 0;
+    }
+  }
+  if (!active || !target || (target.searchingTeam && target.searchingTeam !== team)) return;
+  actor.searching = true;
+  target.searchingTeam = team;
+  target.searchProgress += dt;
+  if (target.searchProgress < 0.65) return;
+  target.opened = true;
+  target.searched = true;
+  target.searchProgress = 1;
+  const recovered = Math.min(3, actor.maxHealth - actor.health);
+  actor.health += recovered;
+  announce(room, `${team === "guard" ? "GUARDS" : "INTRUDERS"} FOUND MOONSHINE${recovered ? ` — +${recovered} HEALTH` : " — ALREADY FIT"}`, 2);
+}
+
+function updateHuntGame(room, dt) {
+  const game = room.game;
+  if (game.status !== "playing") return;
+  game.time = Math.max(0, game.time - dt);
+  game.explosions = game.explosions.filter((item) => (item.life -= dt) > 0);
+  for (const actor of Object.values(game.actors)) {
+    actor.invulnerable = Math.max(0, actor.invulnerable - dt);
+    actor.firing = Math.max(0, actor.firing - dt);
+  }
+
+  if (game.time <= 0) {
+    game.status = "finished";
+    const intruderHealth = game.actors.intruder.health;
+    const guardHealth = game.actors.guard.health;
+    game.winner = intruderHealth === guardHealth ? null : (intruderHealth > guardHealth ? "intruder" : "guard");
+    announce(room, game.winner ? `${game.winner === "guard" ? "GUARDS" : "INTRUDERS"} WIN ON HEALTH — PRESS R` : "STALEMATE — PRESS R FOR REMATCH", 999);
+    return;
+  }
+
+  for (const team of ["intruder", "guard"]) {
+    const actor = game.actors[team];
+    const movement = room.inputs[`${team}-movement`];
+    const weapons = room.inputs[`${team}-weapons`];
+    let moveX = movement.search ? 0 : Number(movement.right) - Number(movement.left);
+    let moveY = movement.search ? 0 : Number(movement.down) - Number(movement.up);
+    [moveX, moveY] = normalize(moveX, moveY);
+    const speed = movement.sneak ? 0.95 : 1.62;
+    moveEntity(game.map, actor, moveX * speed, moveY * speed, dt, 0.3);
+
+    let aimX = Number(weapons.right) - Number(weapons.left);
+    let aimY = Number(weapons.down) - Number(weapons.up);
+    if (aimX || aimY) [actor.aimX, actor.aimY] = normalize(aimX, aimY);
+
+    if (weapons.fire > 0 && actor.firing <= 0 && actor.ammo > 0) {
+      actor.ammo -= 1;
+      actor.firing = 0.34;
+      game.bullets.push({
+        team,
+        x: actor.x + actor.aimX * 0.46,
+        y: actor.y + actor.aimY * 0.46,
+        vx: actor.aimX * 8.4,
+        vy: actor.aimY * 8.4,
+        life: 1.45
+      });
+    }
+    weapons.fire = 0;
+
+    if (weapons.grenade > 0 && actor.grenades > 0) {
+      actor.grenades -= 1;
+      game.thrown.push({
+        team,
+        x: actor.x + actor.aimX * 0.5,
+        y: actor.y + actor.aimY * 0.5,
+        vx: actor.aimX * 4.2,
+        vy: actor.aimY * 4.2,
+        fuse: 1.35
+      });
+    }
+    weapons.grenade = 0;
+    updateMoonshine(room, team, movement.search, dt);
+  }
+
+  for (const bullet of game.bullets) {
+    bullet.x += bullet.vx * dt;
+    bullet.y += bullet.vy * dt;
+    bullet.life -= dt;
+    if (Shared.isSolid(game.map, bullet.x, bullet.y)) bullet.life = 0;
+    const targetTeam = bullet.team === "guard" ? "intruder" : "guard";
+    const target = game.actors[targetTeam];
+    if (bullet.life > 0 && sameRoom(target, bullet) && Math.hypot(target.x - bullet.x, target.y - bullet.y) < 0.42) {
+      bullet.life = 0;
+      damageHunter(room, targetTeam, 1);
+    }
+  }
+  game.bullets = game.bullets.filter((bullet) => bullet.life > 0);
+
+  for (const grenade of game.thrown) {
+    const nextX = grenade.x + grenade.vx * dt;
+    const nextY = grenade.y + grenade.vy * dt;
+    if (collides(game.map, nextX, grenade.y, 0.16)) grenade.vx *= -0.55;
+    else grenade.x = nextX;
+    if (collides(game.map, grenade.x, nextY, 0.16)) grenade.vy *= -0.55;
+    else grenade.y = nextY;
+    grenade.vx *= 0.982;
+    grenade.vy *= 0.982;
+    grenade.fuse -= dt;
+    if (grenade.fuse <= 0) {
+      game.explosions.push({ x: grenade.x, y: grenade.y, life: 0.48 });
+      const targetTeam = grenade.team === "guard" ? "intruder" : "guard";
+      const target = game.actors[targetTeam];
+      if (sameRoom(target, grenade) && Math.hypot(target.x - grenade.x, target.y - grenade.y) < 2.25) damageHunter(room, targetTeam, 2);
+    }
+  }
+  game.thrown = game.thrown.filter((grenade) => grenade.fuse > 0);
+  if (game.flash && Date.now() / 1000 > game.flashUntil) game.flash = "";
+}
+
+function publicState(room, viewerRole = "movement") {
+  const game = room.game;
+  if (room.mode === "versus") {
+    const viewerTeam = teamForRole(viewerRole);
+    const opponentTeam = viewerTeam === "guard" ? "intruder" : "guard";
+    const player = game.actors[viewerTeam];
+    const currentRoom = roomPosition(player);
+    let status = game.status;
+    if (game.status === "finished") status = game.winner === viewerTeam ? "won" : "lost";
+    return {
+      type: "state",
+      mode: "versus",
+      viewerTeam,
+      status,
+      level: 1,
+      time: game.time,
+      score: 0,
+      alert: 1,
+      flash: game.flash,
+      room: { x: currentRoom.x, y: currentRoom.y, number: currentRoom.y * 4 + currentRoom.x + 1 },
+      player,
+      opponent: game.actors[opponentTeam],
+      health: {
+        intruder: game.actors.intruder.health,
+        guard: game.actors.guard.health,
+        max: game.actors.intruder.maxHealth
+      },
+      enemies: [],
+      bullets: game.bullets.filter((bullet) => bullet.team === viewerTeam),
+      enemyBullets: game.bullets.filter((bullet) => bullet.team !== viewerTeam),
+      thrown: game.thrown,
+      explosions: game.explosions,
+      chests: game.chests,
+      intel: [],
+      ammo: [],
+      connected: Object.fromEntries(Object.entries(room.sockets).map(([role, socket]) => [role, Boolean(socket)]))
+    };
+  }
   const currentRoom = roomPosition(game.player);
   return {
     type: "state",
+    mode: "coop",
     status: game.status,
     level: game.level,
     time: game.time,
@@ -601,9 +839,13 @@ setInterval(() => {
       rooms.delete(code);
       continue;
     }
-    if (room.sockets.movement && room.sockets.weapons) updateGame(room, dt);
+    const ready = rolesForMode(room.mode).every((role) => room.sockets[role]);
+    if (ready) {
+      if (room.mode === "versus") updateHuntGame(room, dt);
+      else updateGame(room, dt);
+    }
     if (now - room.lastBroadcast >= 1000 / BROADCAST_RATE) {
-      broadcast(room, publicState(room));
+      for (const [role, socket] of Object.entries(room.sockets)) if (socket) send(socket, publicState(room, role));
       room.lastBroadcast = now;
     }
   }
@@ -618,4 +860,4 @@ function startServer(port = PORT, host = "0.0.0.0") {
 
 if (require.main === module) startServer();
 
-module.exports = { server, startServer, makeGame, updateGame, makeRoom };
+module.exports = { server, startServer, makeGame, makeHuntGame, updateGame, updateHuntGame, makeRoom, publicState };

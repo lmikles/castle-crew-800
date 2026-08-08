@@ -38,6 +38,10 @@
         <div class="mission-order" id="mission-order" hidden>
           <span>FIELD ORDER <b id="objective-step">01 / 03</b></span>
           <strong id="objective-text">Find a key. Search guards and containers.</strong>
+          <div class="hunt-health" id="hunt-health" hidden aria-label="Manhunt team health">
+            <div><span>INTRUDERS</span><b id="intruder-health">■■■■■■</b></div>
+            <div><span>GUARDS</span><b id="guard-health">■■■■■■</b></div>
+          </div>
         </div>
         <div class="play-deck">
           <div class="screen-wrap">
@@ -76,7 +80,8 @@
         <button class="text-button" id="leave-button">ABORT MISSION</button>
       </div>
 
-      <div class="operator-grid">
+      <p class="team-label" id="intruder-team-label" hidden>INTRUDER UNIT</p>
+      <div class="operator-grid" id="intruder-operator-grid">
         <article class="operator-card movement-card" id="movement-card">
           <div class="operator-number">01</div>
           <div>
@@ -94,6 +99,31 @@
             <p class="operator-kicker">WEAPONS OPERATOR</p>
             <h3>The Arms</h3>
             <p>Aim independently, fire the pistol, arc grenades.</p>
+            <div class="keys"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span>AIM</span><kbd>SPACE</kbd><span>FIRE</span><kbd>G</kbd><span>GRENADE</span></div>
+          </div>
+          <span class="operator-status">WAITING</span>
+        </article>
+      </div>
+
+      <p class="team-label guard-label" id="guard-team-label" hidden>CASTLE GUARD UNIT</p>
+      <div class="operator-grid guard-operator-grid" id="guard-operator-grid" hidden>
+        <article class="operator-card guard-card" id="guard-movement-card">
+          <div class="operator-number">03</div>
+          <div>
+            <p class="operator-kicker">GUARD MOVEMENT</p>
+            <h3>Guard Legs</h3>
+            <p>Patrol the castle, cut off the intruders, search moonshine chests.</p>
+            <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>MOVE</span><kbd>E</kbd><span>SEARCH</span></div>
+          </div>
+          <span class="operator-status">WAITING</span>
+        </article>
+        <div class="sync-mark"><span></span><b>SYNC</b><span></span></div>
+        <article class="operator-card guard-card" id="guard-weapons-card">
+          <div class="operator-number">04</div>
+          <div>
+            <p class="operator-kicker">GUARD WEAPONS</p>
+            <h3>Guard Arms</h3>
+            <p>Aim the guard pistol and throw grenades to stop the break-in.</p>
             <div class="keys"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span>AIM</span><kbd>SPACE</kbd><span>FIRE</span><kbd>G</kbd><span>GRENADE</span></div>
           </div>
           <span class="operator-status">WAITING</span>
@@ -129,18 +159,55 @@
         <span>ROOM CODE</span>
         <input id="room-code-input" type="text" inputmode="text" autocomplete="off" maxlength="4" placeholder="ABCD" aria-label="Four-character room code">
       </label>
-      <fieldset>
+      <fieldset class="mode-fieldset" id="mode-fieldset">
+        <legend>GAME TYPE</legend>
+        <div class="mode-choices">
+          <label class="mode-choice">
+            <input type="radio" name="mode" value="coop" checked>
+            <span><b>2P INFILTRATION</b><small>Two operators versus the castle</small></span>
+          </label>
+          <label class="mode-choice">
+            <input type="radio" name="mode" value="versus">
+            <span><b>4P MANHUNT</b><small>Intruders versus castle guards</small></span>
+          </label>
+        </div>
+      </fieldset>
+      <fieldset id="role-fieldset">
         <legend>YOUR ROLE</legend>
-        <label class="role-choice">
+        <label class="role-choice" data-mode="coop">
           <input type="radio" name="role" value="movement" checked>
           <span class="role-icon boot-icon" aria-hidden="true">↟</span>
           <span><b>THE LEGS</b><small>Move · sneak · search</small></span>
           <i></i>
         </label>
-        <label class="role-choice">
+        <label class="role-choice" data-mode="coop">
           <input type="radio" name="role" value="weapons">
           <span class="role-icon aim-icon" aria-hidden="true">⌖</span>
           <span><b>THE ARMS</b><small>Aim · shoot · throw</small></span>
+          <i></i>
+        </label>
+        <label class="role-choice" data-mode="versus" hidden>
+          <input type="radio" name="role" value="intruder-movement">
+          <span class="role-icon boot-icon" aria-hidden="true">↟</span>
+          <span><b>INTRUDER LEGS</b><small>Move · sneak · drink</small></span>
+          <i></i>
+        </label>
+        <label class="role-choice" data-mode="versus" hidden>
+          <input type="radio" name="role" value="intruder-weapons">
+          <span class="role-icon aim-icon" aria-hidden="true">⌖</span>
+          <span><b>INTRUDER ARMS</b><small>Aim · shoot · throw</small></span>
+          <i></i>
+        </label>
+        <label class="role-choice guard-choice" data-mode="versus" hidden>
+          <input type="radio" name="role" value="guard-movement">
+          <span class="role-icon boot-icon" aria-hidden="true">♜</span>
+          <span><b>GUARD LEGS</b><small>Patrol · pursue · drink</small></span>
+          <i></i>
+        </label>
+        <label class="role-choice guard-choice" data-mode="versus" hidden>
+          <input type="radio" name="role" value="guard-weapons">
+          <span class="role-icon aim-icon" aria-hidden="true">✣</span>
+          <span><b>GUARD ARMS</b><small>Aim · shoot · throw</small></span>
           <i></i>
         </label>
       </fieldset>
