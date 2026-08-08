@@ -4,6 +4,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const os = require("node:os");
 const { WebSocketServer, WebSocket } = require("ws");
 const Shared = require("./public/shared.js");
 
@@ -23,7 +24,19 @@ const MIME = {
 };
 
 const server = http.createServer((req, res) => {
-  const requestPath = req.url === "/" ? "/index.html" : req.url.split("?")[0];
+  const pathname = req.url.split("?")[0];
+  if (pathname === "/api/network") {
+    const hostPort = String(req.headers.host || `localhost:${PORT}`).split(":").pop();
+    const addresses = Object.values(os.networkInterfaces()).flat().filter((entry) =>
+      entry && entry.family === "IPv4" && !entry.internal &&
+      (/^192\.168\./.test(entry.address) || /^10\./.test(entry.address) || /^172\.(1[6-9]|2\d|3[01])\./.test(entry.address))
+    );
+    const body = JSON.stringify({ lanOrigins: addresses.map((entry) => `http://${entry.address}:${hostPort}`) });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(body);
+    return;
+  }
+  const requestPath = pathname === "/" ? "/index.html" : pathname;
   const safePath = path.normalize(requestPath).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(PUBLIC_DIR, safePath);
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -164,8 +177,14 @@ function maybeStart(room) {
   }
 }
 
-function claimRoom(ws, code, role) {
-  const room = rooms.get(code);
+function claimRoom(ws, code, role, recoverMissing = false) {
+  let room = rooms.get(code);
+  let recovered = false;
+  if (!room && recoverMissing && /^[A-Z0-9]{4}$/.test(code)) {
+    room = makeRoom(code);
+    rooms.set(code, room);
+    recovered = true;
+  }
   if (!room) return send(ws, { type: "error", message: "No mission uses that code." });
   if (!["movement", "weapons"].includes(role)) return send(ws, { type: "error", message: "Choose an operator role." });
   if (room.sockets[role] && room.sockets[role] !== ws) {
@@ -176,7 +195,7 @@ function claimRoom(ws, code, role) {
   room.emptySince = null;
   ws.room = room;
   ws.role = role;
-  send(ws, { type: "joined", code, role });
+  send(ws, { type: "joined", code, role, recovered });
   maybeStart(room);
 }
 
@@ -193,7 +212,7 @@ wss.on("connection", (ws) => {
       return;
     }
     if (message.type === "join") {
-      claimRoom(ws, String(message.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4), message.role);
+      claimRoom(ws, String(message.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4), message.role, true);
       return;
     }
     if (!ws.room || !ws.role) return;

@@ -62,6 +62,7 @@
   let roomChangeAt = 0;
   let audioContext = null;
   let toastTimer;
+  let lanOrigin = "";
 
   const held = new Set();
   const impulses = { fire: 0, grenade: 0 };
@@ -163,6 +164,7 @@
     if (message.type === "joined") {
       roomCode = message.code;
       myRole = message.role;
+      sessionStorage.setItem("castleCrewMission", JSON.stringify({ code: roomCode, role: myRole }));
       ui.dialog.close();
       ui.copyCode.textContent = roomCode;
       ui.mission.hidden = false;
@@ -172,6 +174,7 @@
       history.replaceState(null, "", `?room=${roomCode}`);
       tone(220, .09, "square", .03, 110);
       setTimeout(() => tone(440, .12, "square", .025), 100);
+      if (message.recovered) toast("MISSION LINK RECOVERED");
       return;
     }
     if (message.type === "lobby") {
@@ -264,6 +267,9 @@
     ui.dialogSubmit.firstChild.textContent = mode === "join" ? "JOIN ROOM " : "CREATE ROOM ";
     const queryCode = new URLSearchParams(location.search).get("room");
     if (queryCode && mode === "join") ui.roomInput.value = queryCode.slice(0, 4).toUpperCase();
+    const invitedRole = new URLSearchParams(location.search).get("role");
+    const roleChoice = ui.form.querySelector(`input[name="role"][value="${invitedRole}"]`);
+    if (roleChoice && mode === "join") roleChoice.checked = true;
     ui.dialog.showModal();
     if (mode === "join") setTimeout(() => ui.roomInput.focus(), 50);
   }
@@ -287,12 +293,19 @@
     } else send({ type: "create", role });
   });
   ui.copyCode.addEventListener("click", async () => {
-    const shareUrl = `${location.origin}${location.pathname}?room=${roomCode}`;
+    const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    const inviteOrigin = localHost && lanOrigin ? lanOrigin : location.origin;
+    const partnerRole = myRole === "movement" ? "weapons" : "movement";
+    const shareUrl = `${inviteOrigin}${location.pathname}?room=${roomCode}&role=${partnerRole}`;
     try { await navigator.clipboard.writeText(`Join my Castle Crew mission: ${roomCode}\n${shareUrl}`); toast("INVITE COPIED"); }
     catch { await navigator.clipboard.writeText(roomCode); toast("CODE COPIED"); }
     tone(520, .08, "square", .025, 160);
   });
-  ui.leave.addEventListener("click", () => { history.replaceState(null, "", location.pathname); location.reload(); });
+  ui.leave.addEventListener("click", () => {
+    sessionStorage.removeItem("castleCrewMission");
+    history.replaceState(null, "", location.pathname);
+    location.reload();
+  });
 
   const keyMap = {
     KeyW: "up", KeyS: "down", KeyA: "left", KeyD: "right",
@@ -619,8 +632,17 @@
     requestAnimationFrame(frame);
   }
 
-  const invitedCode = new URLSearchParams(location.search).get("room");
-  if (invitedCode) setTimeout(() => openDialog("join"), 250);
+  const invitedCode = new URLSearchParams(location.search).get("room")?.toUpperCase();
+  let savedMission = null;
+  try { savedMission = JSON.parse(sessionStorage.getItem("castleCrewMission")); } catch { savedMission = null; }
+  if (invitedCode && savedMission?.code === invitedCode && savedMission?.role) {
+    pendingAction = { type: "join", code: invitedCode, role: savedMission.role };
+  } else if (invitedCode) setTimeout(() => openDialog("join"), 250);
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+    fetch("/api/network").then((response) => response.json()).then((data) => {
+      lanOrigin = data.lanOrigins?.[0] || "";
+    }).catch(() => {});
+  }
   connect();
   requestAnimationFrame(frame);
 })();
