@@ -3,7 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { WebSocket } = require("ws");
-const { server, startServer, makeRoom, updateGame, updateHuntGame, publicState } = require("../server.js");
+const Shared = require("../public/shared.js");
+const { server, startServer, makeRoom, makeLevel, updateGame, updateHuntGame, publicState } = require("../server.js");
 
 function openSocket(url) {
   return new Promise((resolve, reject) => {
@@ -80,6 +81,28 @@ test("movement operator can search a container and recover its contents", () => 
   assert.equal(room.game.flash, "IRON KEY!");
 });
 
+test("two-player moonshine restores health and higher floors add guard dogs", () => {
+  const room = makeRoom("RUM2");
+  room.game.status = "playing";
+  room.game.enemies = [];
+  room.game.player.health = 1;
+  const moonshine = room.game.chests.find((item) => item.content === "moonshine");
+  assert.ok(moonshine, "each generated floor should include healing moonshine");
+  moonshine.locked = false;
+  room.game.player.x = moonshine.x - 1;
+  room.game.player.y = moonshine.y;
+  room.inputs.movement.search = true;
+  for (let frame = 0; frame < 22; frame += 1) updateGame(room, 0.05);
+  assert.equal(room.game.player.health, 3);
+  assert.match(room.game.flash, /MOONSHINE/);
+
+  const floorThree = makeLevel(3, 123456);
+  const floorFive = makeLevel(5, 123456);
+  assert.equal(floorThree.enemies.filter((enemy) => enemy.dog).length, 1);
+  assert.equal(floorFive.enemies.filter((enemy) => enemy.dog).length, 3);
+  assert.notDeepEqual(Shared.generateMap(1, 111), Shared.generateMap(1, 222), "different seeds should generate different castle details");
+});
+
 test("four-player Manhunt supports team health, combat, and moonshine", () => {
   const room = makeRoom("HUNT", "versus");
   assert.deepEqual(Object.keys(room.sockets), [
@@ -121,7 +144,8 @@ test("four-player Manhunt supports team health, combat, and moonshine", () => {
 test("Manhunt starts when all four online controller roles join", async (t) => {
   await new Promise((resolve) => startServer(0, "127.0.0.1").once("listening", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  const url = `ws://127.0.0.1:${server.address().port}`;
+  const port = server.address().port;
+  const url = `ws://127.0.0.1:${port}`;
   const roles = ["intruder-movement", "intruder-weapons", "guard-movement", "guard-weapons"];
   const sockets = [];
 
@@ -151,5 +175,14 @@ test("Manhunt starts when all four online controller roles join", async (t) => {
   assert.ok(roles.every((role) => state.connected[role]), "all four controller roles should be online");
   assert.equal(state.health.intruder, 6);
   assert.equal(state.health.guard, 6);
+
+  const posted = await fetch(`http://127.0.0.1:${port}/api/scores`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initials: "DOG", score: 4321, mode: "versus" })
+  });
+  assert.equal(posted.status, 201);
+  const leaderboard = await posted.json();
+  assert.deepEqual(leaderboard.scores[0], { initials: "DOG", score: 4321, mode: "MANHUNT" });
   for (const socket of sockets) socket.close();
 });

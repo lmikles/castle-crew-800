@@ -17,8 +17,8 @@
     };
   }
 
-  function generateMap(level) {
-    const random = seeded(800 + level * 2600);
+  function generateMap(level, mapSeed) {
+    const random = seeded(Number.isFinite(mapSeed) ? mapSeed : 800 + level * 2600);
     const grid = Array.from({ length: MAP_HEIGHT }, (_, y) =>
       Array.from({ length: MAP_WIDTH }, (_, x) =>
         x === 0 || y === 0 || x === MAP_WIDTH - 1 || y === MAP_HEIGHT - 1 ? "#" : "."

@@ -26,6 +26,8 @@
     missionOrder: document.querySelector("#mission-order"),
     objectiveStep: document.querySelector("#objective-step"),
     objectiveText: document.querySelector("#objective-text"),
+    coopHealth: document.querySelector("#coop-health"),
+    agentHealth: document.querySelector("#agent-health"),
     huntHealth: document.querySelector("#hunt-health"),
     intruderHealth: document.querySelector("#intruder-health"),
     guardHealth: document.querySelector("#guard-health"),
@@ -44,7 +46,23 @@
     floor: document.querySelector("#floor"),
     timer: document.querySelector("#timer"),
     gameMessage: document.querySelector("#game-message"),
+    endScreen: document.querySelector("#end-screen"),
+    endKicker: document.querySelector("#end-kicker"),
+    endTitle: document.querySelector("#end-title"),
+    danceFloor: document.querySelector("#dance-floor"),
+    finalScore: document.querySelector("#final-score"),
+    scoreForm: document.querySelector("#score-form"),
+    scoreInitials: document.querySelector("#score-initials"),
+    scoreList: document.querySelector("#score-list"),
+    rematch: document.querySelector("#rematch-button"),
     toast: document.querySelector("#toast")
+  };
+
+  const media = {
+    background: document.querySelector("#music-background"),
+    win: document.querySelector("#sound-win"),
+    death: document.querySelector("#sound-death"),
+    key: document.querySelector("#sound-key")
   };
 
   const PALETTE = {
@@ -80,6 +98,10 @@
   let audioContext = null;
   let toastTimer;
   let lanOrigin = "";
+  let visitedMapKey = "";
+  let visitedRooms = new Set();
+  let lastStatus = "";
+  let endScreenStatus = "";
 
   const held = new Set();
   const impulses = { fire: 0, grenade: 0 };
@@ -109,6 +131,14 @@
   function initAudio() {
     if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
     if (audioContext.state === "suspended") audioContext.resume();
+    media.background.volume = 0.22;
+    if (media.background.paused) media.background.play().catch(() => {});
+  }
+
+  function playTrack(track, volume = .7) {
+    track.volume = volume;
+    track.currentTime = 0;
+    track.play().catch(() => {});
   }
 
   function tone(frequency, length, type = "square", volume = 0.035, slide = 0) {
@@ -235,6 +265,7 @@
           tone(240, .1, "square", .03, 220);
           setTimeout(() => tone(480, .16, "square", .03, 180), 120);
         }
+        if (message.flash.includes("IRON KEY")) playTrack(media.key, .72);
       }
       if (message.room?.number && message.room.number !== lastRoomNumber) {
         roomChangeAt = performance.now();
@@ -244,10 +275,19 @@
       lastExplosionCount = message.explosions.length;
       lastFlash = message.flash;
       lastRoomNumber = message.room?.number || lastRoomNumber;
+      const nextMapKey = `${message.mode}:${message.level}:${message.mapSeed || 0}`;
+      if (nextMapKey !== visitedMapKey) {
+        visitedMapKey = nextMapKey;
+        visitedRooms = new Set();
+      }
+      if (message.room) visitedRooms.add(`${message.room.x},${message.room.y}`);
       gameState = message;
       updateHud();
       updateObjective(message);
       drawMinimap(message);
+      if (["won", "lost"].includes(message.status) && message.status !== lastStatus) showEndScreen(message.status, message.score);
+      if (message.status === "playing" && ["won", "lost"].includes(lastStatus)) hideEndScreen();
+      lastStatus = message.status;
     }
   }
 
@@ -264,6 +304,7 @@
 
   function applyModePresentation() {
     const hunt = myMode === "versus";
+    ui.coopHealth.hidden = hunt;
     ui.huntHealth.hidden = !hunt;
     ui.guardGrid.hidden = !hunt;
     ui.intruderTeamLabel.hidden = !hunt;
@@ -312,6 +353,10 @@
       const healthGlyphs = (value) => "■".repeat(value) + "□".repeat(Math.max(0, gameState.health.max - value));
       ui.intruderHealth.textContent = healthGlyphs(gameState.health.intruder);
       ui.guardHealth.textContent = healthGlyphs(gameState.health.guard);
+    } else {
+      const health = Math.max(0, gameState.player.health || 0);
+      ui.agentHealth.textContent = "■".repeat(health) + "□".repeat(Math.max(0, 4 - health));
+      ui.coopHealth.classList.toggle("danger", health <= 1);
     }
     if (!ready && roomCode) {
       ui.gameMessage.hidden = false;
@@ -349,8 +394,55 @@
     ui.objectiveText.textContent = text;
   }
 
+  function renderScores(scores) {
+    ui.scoreList.innerHTML = "";
+    const entries = scores.length ? scores.slice(0, 5) : [{ initials: "---", score: 0 }];
+    for (const entry of entries) {
+      const item = document.createElement("li");
+      const initials = document.createElement("b");
+      const score = document.createElement("em");
+      initials.textContent = entry.initials;
+      score.textContent = String(entry.score).padStart(6, "0");
+      item.append(initials, score);
+      ui.scoreList.append(item);
+    }
+  }
+
+  async function loadScores() {
+    try {
+      const response = await fetch("/api/scores", { cache: "no-store" });
+      const data = await response.json();
+      renderScores(data.scores || []);
+    } catch { renderScores([]); }
+  }
+
+  function showEndScreen(status, score) {
+    endScreenStatus = status;
+    const won = status === "won";
+    ui.endScreen.hidden = false;
+    ui.endScreen.classList.toggle("defeat", !won);
+    ui.endKicker.textContent = won ? "MISSION COMPLETE" : "OPERATOR DOWN";
+    ui.endTitle.textContent = won ? "YOU WIN" : "YOU DIED";
+    ui.danceFloor.hidden = !won;
+    ui.scoreForm.hidden = !won;
+    ui.finalScore.textContent = String(score || 0).padStart(6, "0");
+    const postButton = ui.scoreForm.querySelector("button");
+    postButton.disabled = false;
+    postButton.textContent = "POST SCORE";
+    media.background.pause();
+    playTrack(won ? media.win : media.death, won ? .8 : .72);
+    loadScores();
+    if (won) setTimeout(() => ui.scoreInitials.select(), 250);
+  }
+
+  function hideEndScreen() {
+    ui.endScreen.hidden = true;
+    endScreenStatus = "";
+    if (audioContext) media.background.play().catch(() => {});
+  }
+
   function drawMinimap(state) {
-    const map = CastleShared.generateMap(state.level);
+    const map = CastleShared.generateMap(state.level, state.mapSeed);
     const width = minimap.width;
     const height = minimap.height;
     const padding = 8;
@@ -363,6 +455,19 @@
 
     mapCtx.fillStyle = "#020609";
     mapCtx.fillRect(0, 0, width, height);
+
+    mapCtx.strokeStyle = "#18201e";
+    mapCtx.lineWidth = 1;
+    for (let roomY = 0; roomY < 3; roomY += 1) {
+      for (let roomX = 0; roomX < 4; roomX += 1) {
+        mapCtx.strokeRect(
+          Math.round(offsetX + roomX * ROOM_WIDTH * scale) + .5,
+          Math.round(offsetY + roomY * ROOM_HEIGHT * scale) + .5,
+          Math.round(ROOM_WIDTH * scale) - 1,
+          Math.round(ROOM_HEIGHT * scale) - 1
+        );
+      }
+    }
 
     const room = state.room || roomOf(state.player);
     mapCtx.fillStyle = "rgba(219, 229, 108, .07)";
@@ -383,6 +488,8 @@
 
     for (let y = 0; y < CastleShared.MAP_HEIGHT; y += 1) {
       for (let x = 0; x < CastleShared.MAP_WIDTH; x += 1) {
+        const tileRoom = `${Math.max(0, Math.min(3, Math.floor(x / ROOM_WIDTH)))},${Math.max(0, Math.min(2, Math.floor(y / ROOM_HEIGHT)))}`;
+        if (!visitedRooms.has(tileRoom)) continue;
         const tile = map[y][x];
         const px = offsetX + x * scale;
         const py = offsetY + y * scale;
@@ -404,6 +511,8 @@
       mapCtx.fillStyle = "#b56d6d";
       for (const chest of state.chests || []) {
         if (chest.opened) continue;
+        const chestRoom = roomOf(chest);
+        if (!visitedRooms.has(`${chestRoom.x},${chestRoom.y}`)) continue;
         mapCtx.fillRect(
           Math.round(offsetX + chest.x * scale) - 1,
           Math.round(offsetY + chest.y * scale) - 1,
@@ -422,8 +531,8 @@
 
     ui.mapFloor.textContent = String(state.level).padStart(2, "0");
     minimap.setAttribute("aria-label", state.mode === "versus"
-      ? `Manhunt map. You are in room ${room.number || 1}; unopened moonshine chests are marked in red.`
-      : `Floor ${state.level} map. You are in room ${room.number || 1}; the stairs are in the northeast room.`);
+      ? `Fog-of-war Manhunt map. ${visitedRooms.size} of 12 rooms explored; visible moonshine chests are marked in red.`
+      : `Fog-of-war floor ${state.level} map. ${visitedRooms.size} of 12 rooms explored.`);
   }
 
   function updateRoleCardsFromConnected(connected) {
@@ -495,6 +604,27 @@
       send({ type: "join", code, role, mode });
     } else send({ type: "create", role, mode });
   });
+  ui.scoreInitials.addEventListener("input", () => {
+    ui.scoreInitials.value = ui.scoreInitials.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
+  });
+  ui.scoreForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const initials = ui.scoreInitials.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3).padEnd(3, "A");
+    ui.scoreInitials.value = initials;
+    try { localStorage.setItem("castleCrewInitials", initials); } catch {}
+    const response = await fetch("/api/scores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initials, score: gameState?.score || 0, mode: gameState?.mode || "coop" })
+    });
+    const data = await response.json();
+    renderScores(data.scores || []);
+    const postButton = ui.scoreForm.querySelector("button");
+    postButton.disabled = true;
+    postButton.textContent = "SCORE POSTED";
+    toast("HIGH SCORE POSTED");
+  });
+  ui.rematch.addEventListener("click", () => send({ type: "restart" }));
   ui.copyCode.addEventListener("click", async () => {
     const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
     const inviteOrigin = localHost && lanOrigin ? lanOrigin : location.origin;
@@ -743,6 +873,10 @@
   }
 
   function drawGuard(enemy, room) {
+    if (enemy.dog) {
+      drawDog(enemy, room);
+      return;
+    }
     const { x, y } = screenPoint(enemy, room);
     if (enemy.health <= 0) {
       rect(x - 22, y + 7, 44, 7, PALETTE.mortar);
@@ -769,6 +903,22 @@
       rect(x - 17, y + 29, 34, 3, PALETTE.mortar);
       rect(x - 17, y + 29, 34 * Math.min(1, enemy.searchProgress / .9), 3, PALETTE.white);
     }
+  }
+
+  function drawDog(dog, room) {
+    const { x, y } = screenPoint(dog, room);
+    if (dog.health <= 0) {
+      rect(x - 23, y + 8, 45, 7, PALETTE.rust);
+      return;
+    }
+    const facing = Math.cos(dog.facing || 0) < 0 ? -1 : 1;
+    rect(x - 18, y - 5, 33, 17, PALETTE.rust);
+    rect(x + facing * 12 - (facing < 0 ? 14 : 0), y - 15, 16, 15, PALETTE.paper);
+    rect(x - 14, y + 11, 6, 12, PALETTE.rust);
+    rect(x + 7, y + 11, 6, 12, PALETTE.rust);
+    rect(x - facing * 24, y - 9, facing * 13, 5, PALETTE.rust);
+    rect(x + facing * 22, y - 10, 3, 3, PALETTE.deepest);
+    if (dog.state === "alert") tinyText("!", x, y - 27, PALETTE.red, "center", 13);
   }
 
   function drawChest(chest, room) {
@@ -820,7 +970,7 @@
   }
 
   function drawGame(state) {
-    const map = CastleShared.generateMap(state.level);
+    const map = CastleShared.generateMap(state.level, state.mapSeed);
     const room = { ...(state.room || roomOf(state.player)), floor: state.level };
     if (!room.number) room.number = (state.level - 1) * 12 + room.y * 4 + room.x + 1;
     drawRoom(map, room, state.mode === "versus" ? false : state.player.intel);
@@ -873,6 +1023,7 @@
 
   const invitedCode = new URLSearchParams(location.search).get("room")?.toUpperCase();
   const invitedMode = new URLSearchParams(location.search).get("mode") === "versus" ? "versus" : "coop";
+  try { ui.scoreInitials.value = localStorage.getItem("castleCrewInitials") || "AAA"; } catch {}
   let savedMission = null;
   try { savedMission = JSON.parse(sessionStorage.getItem("castleCrewMission")); } catch { savedMission = null; }
   if (invitedCode && savedMission?.code === invitedCode && savedMission?.role) {

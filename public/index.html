@@ -38,6 +38,9 @@
         <div class="mission-order" id="mission-order" hidden>
           <span>FIELD ORDER <b id="objective-step">01 / 03</b></span>
           <strong id="objective-text">Find a key. Search guards and containers.</strong>
+          <div class="coop-health" id="coop-health" aria-label="Agent health">
+            <span>AGENT HEALTH</span><b id="agent-health">■■■■</b>
+          </div>
           <div class="hunt-health" id="hunt-health" hidden aria-label="Manhunt team health">
             <div><span>INTRUDERS</span><b id="intruder-health">■■■■■■</b></div>
             <div><span>GUARDS</span><b id="guard-health">■■■■■■</b></div>
@@ -48,6 +51,28 @@
             <canvas id="game" width="640" height="400"></canvas>
             <div class="screen-glare" aria-hidden="true"></div>
             <div class="game-message" id="game-message" hidden></div>
+            <section class="end-screen" id="end-screen" hidden aria-live="polite">
+              <p class="end-kicker" id="end-kicker">MISSION COMPLETE</p>
+              <h2 id="end-title">YOU WIN</h2>
+              <div class="dance-floor" id="dance-floor" aria-label="The victor performs an 8-bit Carlton dance">
+                <div class="pixel-dancer" aria-hidden="true">
+                  <i class="dance-head"></i><i class="dance-body"></i>
+                  <i class="dance-arm left"></i><i class="dance-arm right"></i>
+                  <i class="dance-leg left"></i><i class="dance-leg right"></i>
+                </div>
+              </div>
+              <p class="final-score">SCORE <strong id="final-score">000000</strong></p>
+              <form class="score-entry" id="score-form">
+                <label for="score-initials">ENTER INITIALS</label>
+                <input id="score-initials" name="initials" maxlength="3" value="AAA" autocomplete="off" aria-label="Three high-score initials">
+                <button type="submit">POST SCORE</button>
+              </form>
+              <div class="scoreboard">
+                <span>CASTLE TOP 5</span>
+                <ol id="score-list"><li><b>---</b><em>000000</em></li></ol>
+              </div>
+              <button class="rematch-button" id="rematch-button">REMATCH [R]</button>
+            </section>
           </div>
           <aside class="map-panel" id="map-panel" hidden aria-label="Castle floor minimap">
             <div class="map-heading">
@@ -217,6 +242,10 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <audio id="music-background" src="/audio/background-music.mp3" preload="auto" loop></audio>
+  <audio id="sound-win" src="/audio/you-win.mp3" preload="auto"></audio>
+  <audio id="sound-death" src="/audio/you-died.mp3" preload="auto"></audio>
+  <audio id="sound-key" src="/audio/key-grabbed.mp3" preload="auto"></audio>
   <script src="/shared.js"></script>
   <script src="/game.js"></script>
 </body>

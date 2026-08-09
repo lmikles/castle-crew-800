@@ -15,6 +15,7 @@ const BROADCAST_RATE = 15;
 const rooms = new Map();
 const COOP_ROLES = ["movement", "weapons"];
 const HUNT_ROLES = ["intruder-movement", "intruder-weapons", "guard-movement", "guard-weapons"];
+const highScores = [];
 
 function normalizeMode(mode) {
   return mode === "versus" ? "versus" : "coop";
@@ -34,11 +35,38 @@ const MIME = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".mp3": "audio/mpeg"
 };
 
 const server = http.createServer((req, res) => {
   const pathname = req.url.split("?")[0];
+  if (pathname === "/api/scores") {
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ scores: highScores.slice(0, 10) }));
+      return;
+    }
+    if (req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => { if (body.length < 2048) body += chunk; });
+      req.on("end", () => {
+        let entry;
+        try { entry = JSON.parse(body); } catch { entry = {}; }
+        const initials = String(entry.initials || "AAA").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3).padEnd(3, "A");
+        const score = Math.max(0, Math.min(9999999, Math.floor(Number(entry.score) || 0)));
+        const mode = entry.mode === "versus" ? "MANHUNT" : "INFILTRATION";
+        highScores.push({ initials, score, mode });
+        highScores.sort((a, b) => b.score - a.score);
+        highScores.splice(10);
+        res.writeHead(201, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ scores: highScores.slice(0, 10) }));
+      });
+      return;
+    }
+    res.writeHead(405, { Allow: "GET, POST" }).end("Method not allowed");
+    return;
+  }
   if (pathname === "/api/network") {
     const hostPort = String(req.headers.host || `localhost:${PORT}`).split(":").pop();
     const addresses = Object.values(os.networkInterfaces()).flat().filter((entry) =>
@@ -89,8 +117,8 @@ function makeInput() {
   return { up: false, down: false, left: false, right: false, sneak: false, search: false, fire: 0, grenade: 0 };
 }
 
-function makeLevel(level = 1) {
-  const map = Shared.generateMap(level);
+function makeLevel(level = 1, mapSeed) {
+  const map = Shared.generateMap(level, mapSeed);
   const patrolPoints = [
     [5, 4], [15, 4], [25, 4], [35, 5], [5, 12], [15, 12],
     [25, 12], [35, 12], [6, 20], [16, 21], [26, 20], [35, 20]
@@ -105,6 +133,15 @@ function makeLevel(level = 1) {
     surrenderMeter: 0, searched: false,
     loot: id === 1 ? "key" : (["ammo", "nothing", "uniform", "grenade"][id % 4])
   }));
+  const dogSpots = [[8, 4], [18, 12], [28, 20], [34, 4]].filter(([x, y]) => map[y]?.[x] === ".");
+  for (let dogIndex = 0; dogIndex < Math.min(Math.max(0, level - 2), dogSpots.length); dogIndex += 1) {
+    const [x, y] = dogSpots[dogIndex];
+    enemies.push({
+      id: 100 + dogIndex, x, y, facing: 0, health: 1, elite: false, dog: true,
+      state: "patrol", cooldown: 0, patrolX: x, patrolY: y, targetX: x, targetY: y,
+      surrenderMeter: 0, searched: true, loot: "nothing"
+    });
+  }
   const chestSpots = [];
   for (let y = 0; y < map.length; y += 1) {
     for (let x = 0; x < map[y].length; x += 1) {
@@ -115,7 +152,7 @@ function makeLevel(level = 1) {
   const keyCandidates = chestSpots.filter(([x, y]) => x < 20 && y > 8);
   const planSpot = planCandidates[(level * 3) % planCandidates.length] || chestSpots[chestSpots.length - 1];
   const keySpot = keyCandidates[(level * 5) % keyCandidates.length] || chestSpots[0];
-  const contents = ["nothing", "ammo", "nothing", "grenade", "nothing", "uniform"];
+  const contents = ["moonshine", "ammo", "nothing", "grenade", "moonshine", "uniform"];
   const chests = chestSpots.map(([x, y], id) => ({
     id, x, y, opened: false, searched: false, searchProgress: 0,
     locked: x === planSpot[0] && y === planSpot[1],
@@ -127,7 +164,8 @@ function makeLevel(level = 1) {
 }
 
 function makeGame() {
-  const levelData = makeLevel(1);
+  const mapSeed = crypto.randomInt(1, 0x7fffffff);
+  const levelData = makeLevel(1, mapSeed);
   return {
     status: "waiting",
     level: 1,
@@ -136,6 +174,7 @@ function makeGame() {
     alert: 0,
     flash: "",
     flashUntil: 0,
+    mapSeed,
     player: {
       x: 2.5, y: Shared.MAP_HEIGHT - 2.5, aimX: 1, aimY: 0,
       health: 4, ammo: 10, grenades: 3, intel: 0, keys: 0, disguise: false,
@@ -157,7 +196,8 @@ function makeHunter(team, x, y, aimX) {
 }
 
 function makeHuntGame() {
-  const map = Shared.generateMap(1);
+  const mapSeed = crypto.randomInt(1, 0x7fffffff);
+  const map = Shared.generateMap(1, mapSeed);
   const chestSpots = [];
   for (let y = 0; y < map.length; y += 1) {
     for (let x = 0; x < map[y].length; x += 1) {
@@ -182,6 +222,7 @@ function makeHuntGame() {
     alert: 0,
     flash: "",
     flashUntil: 0,
+    mapSeed,
     map,
     actors: {
       intruder: makeHunter("intruder", 2.5, Shared.MAP_HEIGHT - 2.5, 1),
@@ -353,7 +394,8 @@ function nextLevel(game) {
     announce({ game }, "DOSSIER EXTRACTED — CASTLE CLEARED!", 999);
     return;
   }
-  const levelData = makeLevel(game.level);
+  game.mapSeed = crypto.randomInt(1, 0x7fffffff);
+  const levelData = makeLevel(game.level, game.mapSeed);
   Object.assign(game, levelData);
   Object.assign(game.player, {
     x: 2.5, y: Shared.MAP_HEIGHT - 2.5, intel: 0, keys: 0, disguise: false,
@@ -399,6 +441,10 @@ function resolveLoot(room, content) {
     player.intel = 1;
     game.score += 1000;
     announce(room, "SECRET WAR PLANS!", 2.4);
+  } else if (content === "moonshine") {
+    const recovered = Math.min(2, 4 - player.health);
+    player.health += recovered;
+    announce(room, recovered ? `MOONSHINE — +${recovered} HEALTH!` : "MOONSHINE — HEALTH FULL!", 1.8);
   } else {
     announce(room, "NOTHING!", 1.3);
   }
@@ -556,6 +602,26 @@ function updateGame(room, dt) {
     const toEnemyX = enemy.x - player.x;
     const toEnemyY = enemy.y - player.y;
     const aimDot = distance ? (toEnemyX * player.aimX + toEnemyY * player.aimY) / distance : 0;
+    if (enemy.dog) {
+      const canTrack = distance < 9.5 && lineClear(game.map, enemy.x, enemy.y, player.x, player.y);
+      if (canTrack) {
+        enemy.state = "alert";
+        enemy.facing = Math.atan2(dy, dx);
+        const [dogX, dogY] = normalize(dx, dy);
+        moveEntity(game.map, enemy, dogX * (1.05 + game.level * 0.08), dogY * (1.05 + game.level * 0.08), dt, 0.24);
+        if (distance < 0.62) damagePlayer(game);
+      } else {
+        enemy.state = "patrol";
+        if (Math.hypot(enemy.targetX - enemy.x, enemy.targetY - enemy.y) < 0.3) {
+          const angle = ((enemy.id + Date.now() / 2200) % 6.28);
+          enemy.targetX = enemy.patrolX + Math.cos(angle) * 1.7;
+          enemy.targetY = enemy.patrolY + Math.sin(angle) * 1.7;
+        }
+        const [dogX, dogY] = normalize(enemy.targetX - enemy.x, enemy.targetY - enemy.y);
+        moveEntity(game.map, enemy, dogX * 0.64, dogY * 0.64, dt, 0.24);
+      }
+      continue;
+    }
     const threatened = !enemy.elite && player.ammo > 0 && distance < 5.5 && aimDot > 0.94 &&
       lineClear(game.map, player.x, player.y, enemy.x, enemy.y) && game.alert < 0.78;
 
@@ -776,9 +842,12 @@ function publicState(room, viewerRole = "movement") {
       status,
       level: 1,
       time: game.time,
-      score: 0,
+      score: game.status === "finished" && game.winner === viewerTeam
+        ? Math.ceil(game.time) * 10 + game.actors[viewerTeam].health * 500
+        : 0,
       alert: 1,
       flash: game.flash,
+      mapSeed: game.mapSeed,
       room: { x: currentRoom.x, y: currentRoom.y, number: currentRoom.y * 4 + currentRoom.x + 1 },
       player,
       opponent: game.actors[opponentTeam],
@@ -808,6 +877,7 @@ function publicState(room, viewerRole = "movement") {
     score: game.score,
     alert: game.alert,
     flash: game.flash,
+    mapSeed: game.mapSeed,
     room: {
       x: currentRoom.x,
       y: currentRoom.y,
@@ -860,4 +930,4 @@ function startServer(port = PORT, host = "0.0.0.0") {
 
 if (require.main === module) startServer();
 
-module.exports = { server, startServer, makeGame, makeHuntGame, updateGame, updateHuntGame, makeRoom, publicState };
+module.exports = { server, startServer, makeGame, makeLevel, makeHuntGame, updateGame, updateHuntGame, makeRoom, publicState };
